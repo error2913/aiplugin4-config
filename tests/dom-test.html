@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>DOM 交互自动化测试</title></head>
+<body>
+<h1>交互测试</h1>
+<ol id="results"></ol>
+<iframe id="frame" src="/index.html" width="1400" height="900"></iframe>
+<script>
+// 在 iframe 里驱动真实页面，断言交互行为。
+const log = [];
+function check(name, cond, extra) {
+    log.push((cond ? 'PASS  ' : 'FAIL  ') + name + (cond ? '' : '  :: ' + (extra ?? '')));
+}
+const f = document.getElementById('frame');
+
+f.onload = () => {
+    const w = f.contentWindow;
+    const d = f.contentDocument;
+    try {
+        const preview = () => d.getElementById('preview').textContent;
+
+        // --- 初始：DeepSeek 默认，未填 key -> 应报错
+        check('初始有 1 张卡片', d.querySelectorAll('.conn-card').length === 1,
+            d.querySelectorAll('.conn-card').length);
+        check('初始未填 key 时显示校验错误', !d.getElementById('validationBox').hidden);
+        check('初始预览含 base_url', /api\.deepseek\.com/.test(preview()));
+
+        // --- 填 api_key
+        const keyIn = d.querySelector('.conn-card input[type=password]');
+        keyIn.value = 'sk-test-abc';
+        keyIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+        check('填 key 后校验通过', d.getElementById('validationBox').hidden,
+            d.getElementById('validationBox').textContent);
+        check('预览含 api_key', /api_key = "sk-test-abc"/.test(preview()), preview());
+
+        // --- 点模型建议，添加模型
+        const sugBtn = d.querySelector('.model-suggest button');
+        check('存在模型建议按钮', !!sugBtn);
+        sugBtn.click();
+        check('点击建议后生成 models 行', /models = \[/.test(preview()), preview());
+        check('生成 tag-pill', d.querySelectorAll('.tag-pill').length === 1);
+
+        // --- 手动输入模型名（含斜杠）
+        const mIn = d.querySelector('.models-input input');
+        mIn.value = 'deepseek-ai/DeepSeek-V3';
+        const addBtn = d.querySelector('.models-input button');
+        addBtn.click();
+        check('含斜杠模型名进入 models', /deepseek-ai\/DeepSeek-V3/.test(preview()), preview());
+        check('现在 2 个模型 pill', d.querySelectorAll('.tag-pill').length === 2,
+            d.querySelectorAll('.tag-pill').length);
+
+        // --- 给斜杠模型设类型 embed -> 应生成带引号的 [types]
+        const sels = d.querySelectorAll('.tag-pill select');
+        const sel = sels[1];
+        sel.value = 'embed';
+        sel.dispatchEvent(new w.Event('change', { bubbles: true }));
+        const pv = preview();
+        check('[types] 表已生成', /\[types\]/.test(pv), pv);
+        check('斜杠模型名加了引号', /"deepseek-ai\/DeepSeek-V3" = "embed"/.test(pv), pv);
+        check('[types] 位于末尾',
+            pv.trim().split('\n').pop().includes('embed'), pv.trim().split('\n').pop());
+
+        // --- 切换到 智谱 -> provider/base_url 应变化
+        const chips = [...d.querySelectorAll('.provider-chip')];
+        const zhipu = chips.find(c => c.textContent.includes('智谱'));
+        zhipu.click();
+        const pv2 = preview();
+        check('切到智谱后 provider 变化', /provider = "zhipu"/.test(pv2), pv2);
+        check('切到智谱后 base_url 变化', /open\.bigmodel\.cn/.test(pv2), pv2);
+        check('切供应商后 api_key 保留', /api_key = "sk-test-abc"/.test(pv2), pv2);
+        check('切供应商后 models 保留', /DeepSeek-V3/.test(pv2), pv2);
+
+        // --- 添加第二条连接
+        d.getElementById('addConnBtn').click();
+        check('添加后有 2 张卡片', d.querySelectorAll('.conn-card').length === 2,
+            d.querySelectorAll('.conn-card').length);
+        check('第二张卡片序号为 1',
+            [...d.querySelectorAll('.conn-index')][1].textContent.includes('连接序号 1'));
+
+        // --- 遮蔽 key
+        d.getElementById('maskKey').checked = true;
+        d.getElementById('maskKey').dispatchEvent(new w.Event('change', { bubbles: true }));
+        const pv3 = preview();
+        check('遮蔽后 api_key 变占位符', /api_key = "sk-xxxx"/.test(pv3), pv3);
+        check('遮蔽后真实 key 不出现', !pv3.includes('sk-test-abc'));
+        d.getElementById('maskKey').checked = false;
+        d.getElementById('maskKey').dispatchEvent(new w.Event('change', { bubbles: true }));
+
+        // --- 导入：解析含斜杠 [types] 的 TOML
+        const ta = d.getElementById('importText');
+        ta.value = 'api_key = "sk-imported"\nprovider = "siliconflow"\nbase_url = "https://api.siliconflow.cn/v1"\nmodels = ["black-forest-labs/FLUX.1-schnell"]\n\n[types]\n"black-forest-labs/FLUX.1-schnell" = "gen"';
+        d.getElementById('importBtn').click();
+        const msg = d.getElementById('importMsg');
+        check('导入成功提示', msg.className.includes('ok'), msg.className + ' / ' + msg.textContent);
+        check('导入后只剩 1 张卡片', d.querySelectorAll('.conn-card').length === 1,
+            d.querySelectorAll('.conn-card').length);
+        const pv4 = preview();
+        check('导入后 key 正确', /sk-imported/.test(pv4), pv4);
+        check('导入后 [types] 保留', /"black-forest-labs\/FLUX\.1-schnell" = "gen"/.test(pv4), pv4);
+
+        // --- 导入错误：未加引号的点号 key
+        ta.value = 'api_key = "k"\n[types]\nglm-4.5 = "vision"';
+        d.getElementById('importBtn').click();
+        const msg2 = d.getElementById('importMsg');
+        check('非法 TOML 报错', msg2.className.includes('err'), msg2.className);
+        check('报错含行号', /第 3 行/.test(msg2.textContent), msg2.textContent);
+
+        // --- 删除连接
+        const delBtn = d.querySelector('.conn-head .btn-danger-ghost');
+        delBtn.click();
+        check('删除后回到空状态', d.getElementById('emptyState').hidden === false);
+    } catch (e) {
+        log.push('FAIL  脚本异常 :: ' + (e && e.message));
+    }
+
+    const ol = document.getElementById('results');
+    ol.innerHTML = '';
+    for (const l of log) {
+        const li = document.createElement('li');
+        li.textContent = l;
+        li.style.color = l.startsWith('PASS') ? 'green' : 'red';
+        li.style.fontFamily = 'monospace';
+        ol.appendChild(li);
+    }
+    const fails = log.filter(l => l.startsWith('FAIL')).length;
+    const summary = document.createElement('div');
+    summary.id = 'summary';
+    summary.textContent = `RESULT ${log.length - fails} passed / ${fails} failed`;
+    document.body.appendChild(summary);
+};
+</script>
+</body>
+</html>

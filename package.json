@@ -1,0 +1,13 @@
+{
+  "name": "aiplugin4-config",
+  "version": "0.1.0",
+  "private": true,
+  "description": "aiplugin4「api连接」可视化配置生成器（零依赖纯静态）",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/run.mjs",
+    "serve": "python -m http.server 8099"
+  },
+  "repository": "https://github.com/error2913/aiplugin4-config",
+  "license": "MIT"
+}

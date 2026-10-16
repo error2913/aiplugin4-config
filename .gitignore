@@ -1,0 +1,14 @@
+# 依赖与构建产物（本仓库零依赖，留作兜底）
+node_modules/
+dist/
+
+# 开发期临时文件
+.dev/
+*.log
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
