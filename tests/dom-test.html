@@ -438,13 +438,13 @@ f.onload = async () => {
             vIn.dispatchEvent(new w.Event('input', { bubbles: true }));
             await sleep(40);
             check('标注该 vendor 收录的媒体用途（elevenlabs 只做语音）',
-                /媒体用途：仅收录了 语音合成/.test(pq('.field-note:last-of-type') ? pqa('.field-note').map(e => e.textContent).join(' ') : ''),
+                /媒体用途：语音合成/.test(pq('.field-note:last-of-type') ? pqa('.field-note').map(e => e.textContent).join(' ') : ''),
                 pqa('.field-note').map(e => e.textContent).join(' | ').slice(0, 300));
             vIn.value = 'dashscope';
             vIn.dispatchEvent(new w.Event('input', { bubbles: true }));
             await sleep(40);
             check('dashscope 标注语音合成 / 文生图',
-                /媒体用途：仅收录了 语音合成 \/ 文生图/.test(pqa('.field-note').map(e => e.textContent).join(' ')),
+                /媒体用途：语音合成 \/ 文生图/.test(pqa('.field-note').map(e => e.textContent).join(' ')),
                 pqa('.field-note').map(e => e.textContent).join(' | ').slice(0, 300));
             d.getElementById('panelCancel').click();
             await sleep(80);

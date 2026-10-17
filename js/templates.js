@@ -24,7 +24,7 @@ export const PROVIDER_TEMPLATES = [
     { id: 'deepseek', label: 'DeepSeek', provider: 'deepseek', api: 'openai-completions',
       baseUrl: 'https://api.deepseek.com/v1', cors: 'allow',
       modelHints: ['deepseek-flash', 'deepseek-pro'],
-      notes: '内置余额查询，可用 .ai balance 直接查。flash 是视觉模型（可识图），pro 是文本模型。' },
+      notes: 'flash 可识图，pro 是文本。.ai balance 可查余额。' },
     { id: 'zhipu', label: '智谱 GLM', provider: 'zhipu', api: 'openai-completions',
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4', cors: 'allow',
       modelHints: ['glm-4-plus', 'glm-4v'],
@@ -40,8 +40,7 @@ export const PROVIDER_TEMPLATES = [
       //
       // 这条注释曾经写的是「原生异步接口（wanx）请用自定义 URL」—— 直接把用户赶去填自定义 URL，
       // 而实际上兼容模式**已经支持 qwen-image 同步生图**（官方文档 POST /compatible-mode/v1/images/generations）。
-      notes: '对话、嵌入、生图（qwen-image / wanx）、语音合成（Qwen-Audio / CosyVoice）都走这一条。'
-          + '选它即可，不用填 URL；wanx 异步与原生 TTS 由插件自动路由到主机根的原生端点。' },
+      notes: '对话 / 嵌入 / 生图 / 语音合成都走这条，不用填 URL。' },
     { id: 'google', label: 'Google Gemini', provider: 'google', api: 'openai-completions',
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', cors: 'unreach',
       modelHints: ['gemini-2.5-flash', 'gemini-embedding-001'],
@@ -49,7 +48,7 @@ export const PROVIDER_TEMPLATES = [
     { id: 'anthropic', label: 'Anthropic Claude', provider: 'anthropic', api: 'anthropic-messages',
       baseUrl: 'https://api.anthropic.com/v1', cors: 'block',
       modelHints: ['claude-sonnet-4-5', 'claude-haiku-4-5'],
-      notes: '流式暂不支持（配 stream = true 会自动回退非流式）。浏览器直连被 CORS 拦截，模型名请手动填。' },
+      notes: '流式会自动回退；浏览器直连被 CORS 拦，模型名手动填。' },
     { id: 'openai', label: 'OpenAI', provider: 'openai', api: 'openai-completions',
       baseUrl: 'https://api.openai.com/v1', cors: 'unreach',
       modelHints: ['gpt-4o', 'text-embedding-3-small'], notes: '国内需自备代理。' },

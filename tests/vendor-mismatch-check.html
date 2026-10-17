@@ -46,7 +46,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
         const note = () => (pq('.field-note.vendor-warn') || {}).textContent || '';
         check('兼容模式 + dashscope → 出警示', /兼容模式/.test(note()), JSON.stringify(note().slice(0, 120)));
-        check('  警示说明了 404 后果', /404/.test(note()), JSON.stringify(note().slice(0, 120)));
+        // 警示文案已压短：不再逐字解释 404 后果，改为断言它点明了「会拼错」
+    check('  警示说明了后果（会拼错）', /拼错/.test(note()), JSON.stringify(note().slice(0, 120)));
         check('  警示给出了正确值 alibaba', /alibaba/.test(note()));
         check('  警示有独立的样式类（黄字）', !!pq('.field-note.vendor-warn'));
 

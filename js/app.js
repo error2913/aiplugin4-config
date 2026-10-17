@@ -452,52 +452,44 @@ function renderPanel() {
         if (eff && MEDIA_VENDOR_USES[eff]) {
             const uses = MEDIA_VENDOR_USES[eff];
             const label = (u) => (u === 'tts' ? '语音合成' : '文生图');
-            usesNote = `媒体用途：仅收录了 ${uses.map(label).join(' / ')}`
-                + `（未收录的用途会退回通用 OpenAI 兼容结构，多半会失败）。`;
+            usesNote = `媒体用途：${uses.map(label).join(' / ')}`;
         }
         // ---- URL 形态与 provider 不匹配 → 拼出来的地址会 404
         //
         // 这是实测踩到的真坑：百炼有**两套**地址形态，而 provider 决定拼哪条路径后缀：
         //   兼容模式  https://<host>/compatible-mode/v1        + provider=alibaba  → /images/generations
         //   原生      https://<host>/api/v1/services/aigc/...  + provider=dashscope → 原生端点
-        // 混搭（如 compatible-mode/v1 + dashscope）会拼成
-        //   .../compatible-mode/v1/api/v1/services/aigc/multimodal-generation/generation → **404**
-        // 而且响应体是空的，插件只能报个状态码，用户完全看不出原因。
+        // 混搭会拼成 .../compatible-mode/v1/api/v1/services/… → **404**，
+        // 且响应体是空的，用户完全看不出原因。
         //
-        // 注意 MaaS 专属域名（llm-xxx.maas.aliyuncs.com）**不在**插件的域名表里，
-        // 必须手工填 provider —— 所以这个坑在专属部署上尤其容易踩。
+        // MaaS 专属域名（llm-xxx.maas.aliyuncs.com）不在插件域名表里，必须手工填 provider
+        // —— 所以这个坑在专属部署上尤其容易踩。
         let mismatchNote = '';
         const url = (draft.baseURL || '').toLowerCase();
         if (eff === 'dashscope' && url.includes('/compatible-mode')) {
-            mismatchNote = '⚠ 地址是**兼容模式**，但 dashscope 走的是原生端点 —— '
-                + '两者会拼出 /compatible-mode/v1/api/v1/services/… → 404。'
-                + '这里应填 alibaba（或把地址换成原生 …/api/v1/services/aigc/multimodal-generation/generation）。';
+            mismatchNote = '⚠ 兼容模式地址配 dashscope 会拼错，应填 alibaba。';
         } else if (eff === 'alibaba' && /\/api\/v1\/services\//.test(url)) {
-            mismatchNote = '⚠ 地址是**百炼原生**端点，但 alibaba 走的是兼容模式 —— '
-                + '这里应填 dashscope。';
+            mismatchNote = '⚠ 原生地址配 alibaba 会拼错，应填 dashscope。';
         }
 
         // ---- 模型与接入方式不兼容
         //
-        // 官方文档明确：**Qwen-Audio 不支持 OpenAI 兼容协议，仅支持 DashScope 协议**
-        // （见「OpenAI Chat接口兼容」）。所以 qwen-audio-* 系列放在兼容模式连接里
-        // **根本没有对应接口** —— 无论 provider 填什么，都会 404。
-        // 实测踩过：把 qwen-audio-3.1-tts-flash 和 qwen-image 放同一条兼容模式连接 → TTS 404。
+        // 官方文档明确：**Qwen-Audio 不支持 OpenAI 兼容协议**（见「OpenAI Chat接口兼容」）。
+        // 所以 qwen-audio-* 放在兼容模式连接里没有对应接口 —— 无论 provider 填什么都会 404。
+        // 实测踩过：qwen-audio-3.1-tts-flash 与 qwen-image 同放一条兼容模式连接 → TTS 404。
         let modelNote = '';
         const modelNames = (draft.models || []).map(m => m.name || '');
         const qwenAudio = modelNames.filter(n => /qwen-audio/i.test(n));
         if (qwenAudio.length && url.includes('/compatible-mode')) {
-            modelNote = `⚠ ${qwenAudio.join(' / ')} 属 Qwen-Audio 系列，**不支持 OpenAI 兼容协议**`
-                + '（官方文档：仅支持 DashScope 协议）—— 放在兼容模式连接里必然 404。'
-                + '请**另开一条原生连接**：baseURL 填 host 根（不带 /compatible-mode/v1），供应商标识填 dashscope。';
+            modelNote = `⚠ ${qwenAudio.join(' / ')} 不支持兼容协议，需另开原生连接（host 根 + dashscope）。`;
         }
 
         vNote.textContent = [
             explicit
                 ? '已手工指定，覆盖自动识别。'
                 : (detected
-                    ? '留空即可 —— 已按 API 地址自动识别。用于选择媒体请求结构（语音/生图）与余额端点。'
-                    : '该地址未收录。若它代理的是某家原生接口（如百炼原生 wanx、Google Cloud TTS），请在此填写对方标识；否则留空按 OpenAI 兼容处理。'),
+                    ? '留空即可 —— 已按 API 地址自动识别。'
+                    : '该地址未收录。代理原生接口时请填对方标识，否则留空按 OpenAI 兼容处理。'),
             usesNote,
             mismatchNote,
             modelNote,
@@ -547,11 +539,8 @@ function renderPanel() {
         label: '连接设置覆盖' + (draft.request && Object.keys(draft.request).length ? '（已设置）' : ''),
         value: draft.request,
         rows: 6,
-        hint: '整段写进配置的 providers[].request —— 只管连接的**周边接口**，与模型请求体无关'
-            + '（请求体在「请求与响应格式」里改）。可用键：'
-            + 'list_url（模型列表地址，不写则按 <API URL>/models 猜）、'
-            + 'auth_header_name / headers（鉴权头与额外头）、timeout（列表拉取超时秒数）、'
-            + 'balance_url / balance_json_path / balance_divisor / balance_currency（.ai balance 的余额接口）。'
+        hint: '写进 providers[].request，只管周边接口（请求体在「请求与响应格式」改）。可用键：'
+            + 'list_url、auth_header_name、headers、timeout、balance_url、balance_json_path。'
             + '留空 = 用插件默认。',
         placeholder: '{\n  "list_url": "https://…/v1/models"\n}',
         onCommit: (v) => {
@@ -781,8 +770,8 @@ function renderModelPicker() {
             outer.appendChild(osum);
             const obody = el('div', 'json-editor-body');
             const onote = el('div', 'field-note');
-            onote.textContent = '整段写进配置的 models[].request。内置预设已覆盖常见厂商，'
-                + '只在结构对不上时改这里（例如接口用 form 表单、或返回结构特殊）。';
+            onote.textContent = '写进 models[].request。内置预设已覆盖常见厂商，'
+                + '只在结构对不上时改。';
             obody.appendChild(onote);
 
             obody.appendChild(jsonEditor({
@@ -815,8 +804,7 @@ function renderModelPicker() {
                 label: '可覆写参数 params',
                 value: reqSub(m, 'params'),
                 rows: 5,
-                hint: '声明哪些参数 AI/命令可以覆写，以及它们的元信息 —— 工具的参数 schema 就由它生成。'
-                    + '每项：{ type, default, min, max, enum, desc }。',
+                hint: '声明可被 AI/命令覆写的参数。每项：{ type, default, min, max, enum, desc }。',
                 placeholder: '{\n  "size": { "type": "string", "default": "1024x1024", "desc": "尺寸" }\n}',
                 onCommit: (v) => { setReqSub(m, 'params', v); renderOutput(); },
             }));
@@ -909,9 +897,7 @@ function buildPurposesInto(wrap) {
     }
 
     const intro = el('div', 'field-note purpose-intro');
-    intro.textContent = '点模型卡片即绑定，角标是取用顺序：插件先用 1，'
-        + '失败（余额不足/权限不足等）时顺着 2、3… 往后切。再点一次取消绑定。'
-        + '一个都不选 = 不写进配置，由插件按该用途候选的第一个取。';
+    intro.textContent = '点卡片绑定，角标是取用顺序：先用 1，失败时顺着 2、3… 往后切。再点一次取消。';
     wrap.appendChild(intro);
 
     for (const pu of PURPOSES) {
@@ -1006,9 +992,7 @@ function buildPurposesInto(wrap) {
         outer.appendChild(osum);
         const obody = el('div', 'json-editor-body');
         const onote = el('div', 'field-note');
-        onote.textContent = '这几段写进配置的 groups[].body，是该用途组每次请求都带的字段。'
-            + '留空 = 用内置默认。识图与嵌入**没有按服务商的预设**（插件的预设只管语音/生图），'
-            + '所以按服务商改结构只能在这里改，或用每个模型的「请求与响应格式」。';
+        onote.textContent = '写进 groups[].body，是该用途组每次请求都带的字段。留空 = 用内置默认。';
         obody.appendChild(onote);
 
         for (const g of groupKeys) {
