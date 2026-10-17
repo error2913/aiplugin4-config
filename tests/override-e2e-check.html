@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>请求体覆盖 端到端检查</title></head>
+<body>
+<pre id="out">running…</pre>
+<iframe id="frame" src="/index.html" width="1500" height="950"></iframe>
+<script>
+// 测试必须从**干净状态**开始：生成器会把草稿存 localStorage，
+// 上一次运行（或手动操作过页面）的存档会让断言基于错误的前提。
+try { localStorage.clear(); } catch (e) { /* 隐私模式等忽略 */ }
+
+// 真人在浏览器里操作的复现：展开「请求覆盖」→ 写 JSON → 看配置变化。
+// 重点验证两件单元测试容易漏掉的事：
+//   1) 非法 JSON 不会把配置写坏（用户输到一半的场景）
+//   2) 输入过程中 **不失焦**（历史 bug：一输入就重置）
+const lines = [];
+const frame = document.getElementById('frame');
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+frame.onload = async () => {
+    const w = frame.contentWindow, d = frame.contentDocument;
+    const q = (s) => d.querySelector(s);
+    const qa = (s) => [...d.querySelectorAll(s)];
+    const preview = () => d.getElementById('preview').textContent;
+
+    q('.pcard .btn-edit').click();
+    await sleep(120);
+
+    // 加一个模型
+    const mIn = q('#panelBody .models-input input');
+    mIn.value = 'sd3-large';
+    q('#panelBody .models-input .btn').click();
+    await sleep(120);
+
+    // 默认连接里已有一个模型（flash）。要操作的是**刚加的那个** ——
+    // 编辑区是 .sel-row 的兄弟，所以按"前一个兄弟行的模型名"来定位，别按索引取。
+    const pickEditor = (modelName) => {
+        const rows = qa('#panelBody .selected-list > .sel-row');
+        for (let i = 0; i < rows.length; i++) {
+            if (rows[i].querySelector('.sel-name').textContent === modelName) {
+                return rows[i].nextElementSibling;   // 紧跟其后的就是它的编辑区
+            }
+        }
+        return null;
+    };
+    const ed = pickEditor('sd3-large');
+    lines.push('请求与响应格式编辑区存在: ' + !!ed);
+    lines.push('编辑区确实属于 sd3-large: ' + !!(ed && ed.previousElementSibling
+        && ed.previousElementSibling.querySelector('.sel-name').textContent === 'sd3-large'));
+    lines.push('默认折叠: ' + !ed.open);
+    ed.open = true;
+    await sleep(80);
+
+    const sub = (label) => [...ed.querySelectorAll('.json-editor')].find((e) => {
+        const s = e.querySelector(':scope > summary');
+        return s && s.textContent === label;
+    });
+    const byLabel = (root, re) => [...root.querySelectorAll('.sub-field')].find((fl) => {
+        const l = fl.querySelector('.sub-label');
+        return l && re.test(l.textContent);
+    });
+
+    // ---- 请求体 body：逐字输入，检查焦点是否保持 ----
+    const bodyEd = sub('请求体 body');
+    const ta = bodyEd.querySelector('textarea');
+    lines.push('body 文本框存在: ' + !!ta);
+    lines.push('初始为空(无覆盖): ' + JSON.stringify(ta.value));
+
+    ta.focus();
+    const target = '{"model":"{model}","prompt":"{prompt}","style":"anime"}';
+    for (const ch of target) {
+        ta.value += ch;
+        ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+        await sleep(2);
+    }
+    lines.push('');
+    const focusHeld = d.activeElement === ta;   // 输入后立刻取，别等点保存（那时焦点在按钮上）
+    lines.push('逐字输入后 activeElement 仍是 textarea: ' + focusHeld);
+    lines.push('输入完整后无错误: ' + bodyEd.querySelector('.json-err').hidden);
+    lines.push('配置里已写入 request.body: ' + /"request":\{"body"/.test(preview()));
+
+    // ---- 故意破坏成非法 JSON ----
+    ta.value = '{"model":"{model}"';
+    ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+    await sleep(60);
+    lines.push('');
+    lines.push('非法 JSON 报错: ' + !bodyEd.querySelector('.json-err').hidden
+        + '  ' + bodyEd.querySelector('.json-err').textContent);
+    lines.push('非法后 textarea 标红: ' + ta.classList.contains('bad'));
+    lines.push('非法后配置里 request 仍在(未被清掉): ' + /"request"/.test(preview()));
+
+    // ---- 恢复合法 ----
+    ta.value = '{"model":"{model}","prompt":"{prompt}","style":"anime"}';
+    ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+    await sleep(60);
+
+    // ---- response 结构化字段：不进 textarea，直接填表单 ----
+    const respEd = sub('响应格式');
+    lines.push('');
+    lines.push('响应格式是结构化表单: ' + (respEd.querySelectorAll('.sub-field').length >= 3
+        && !respEd.querySelector('.json-editor-body > textarea')));
+    const dp = byLabel(respEd, /取数路径/).querySelector('input');
+    dp.value = 'artifacts.0.base64';
+    dp.dispatchEvent(new w.Event('input', { bubbles: true }));
+    await sleep(50);
+    const dt = byLabel(respEd, /数据类型/).querySelector('select');
+    dt.value = 'base64';
+    dt.dispatchEvent(new w.Event('change', { bubbles: true }));
+    await sleep(50);
+    lines.push('data_path 已进配置: ' + /"data_path":"artifacts\.0\.base64"/.test(preview()));
+    lines.push('data_type 已进配置: ' + /"data_type":"base64"/.test(preview()));
+
+    // ---- bodyMode ----
+    const modeRow = pickEditor('sd3-large') && pickEditor('sd3-large').nextElementSibling;
+    lines.push('bodyMode 行紧跟编辑区: ' + !!(modeRow && modeRow.classList.contains('body-mode-row')));
+    lines.push('bodyMode 已解除禁用: ' + !modeRow.querySelector('select').disabled);
+    modeRow.querySelector('select').value = 'merge';
+    modeRow.querySelector('select').dispatchEvent(new w.Event('change', { bubbles: true }));
+    await sleep(60);
+
+    d.getElementById('panelSave').click();
+    await sleep(200);
+
+    const cfg = JSON.parse(preview());
+    const m = cfg.providers[0].models.find(x => x.name === 'sd3-large');
+    lines.push('');
+    lines.push('保存后该模型的配置:');
+    lines.push('  ' + JSON.stringify(m));
+    lines.push('');
+    lines.push('SUMMARY hasRequest=' + !!(m && m.request)
+        + ' bodyMode=' + JSON.stringify(m && m.bodyMode)
+        + ' style=' + JSON.stringify(m && m.request && m.request.body && m.request.body.style)
+        + ' invalidKeptCfg=' + /"request"/.test(preview())
+        + ' focusHeld=' + focusHeld);
+
+    document.getElementById('out').textContent = lines.join('\n');
+    const s = document.createElement('div');
+    s.id = 'summary';
+    s.textContent = 'SUMMARY hasRequest=' + !!(m && m.request)
+        + ' bodyMode=' + JSON.stringify(m && m.bodyMode)
+        + ' style=' + JSON.stringify(m && m.request && m.request.body && m.request.body.style)
+        + ' focusHeld=' + focusHeld;
+    document.body.appendChild(s);
+};
+</script>
+</body>
+</html>

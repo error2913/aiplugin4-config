@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>刷新后 Key 是否保留</title>
+<style>html,body{margin:0;background:#111;color:#eee;font:14px monospace}iframe{border:0;display:block;width:1400px;height:840px}</style>
+</head>
+<body>
+<pre id="out">running…</pre>
+<script>
+// 直接回答"刷新网页为什么丢 Key"。
+//
+// ⚠️ 这个测试页**上一版是无效的**，记录在此避免重犯：
+//    顶部写了 localStorage.clear()，而 <iframe src="/index.html"> 写在它**前面** ——
+//    两者竞态。若 clear 跑在 iframe 内 app.js 读 localStorage **之后**，
+//    那"读到 Key"其实来自 clear 之前的内存状态，测试假通过。
+//    现在改为：**先清（只在 write/clear 模式）→ 再动态创建 iframe**，消除竞态。
+//
+// 为什么不用 iframe.location.reload()：headless 的 --virtual-time-budget 下会挂住。
+// 用"两次独立页面加载 + 同一 --user-data-dir"模拟刷新（localStorage 按源持久化）。
+//
+//   #write  第一次：清空 → 填 Key → 保存 → 报告 localStorage
+//   #read   第二次：**不清空** → 只读，看面板里 Key 有没有恢复
+//   #clear  清空按钮 → 报告
+const mode = location.hash.replace('#', '') || 'write';
+const lines = [];
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const LS_KEY = 'aiplugin4-config-v5-draft';
+const done = (summary) => {
+  document.getElementById('out').textContent = lines.join('\n');
+  document.body.insertAdjacentHTML('beforeend', '<div id="summary">SUMMARY ' + summary + '</div>');
+};
+
+(async () => {
+  try {
+    // ---- 清空只在需要"干净起点"的模式里做，且**必须在 iframe 加载之前**
+    if (mode === 'write' || mode === 'clear') {
+      localStorage.removeItem(LS_KEY);
+    }
+    const before = localStorage.getItem(LS_KEY);
+    lines.push('[' + mode + '] 加载 iframe 前的存档: ' + (before ? before.slice(0, 70) + '…' : '(无)'));
+
+    const frame = document.createElement('iframe');
+    frame.src = '/index.html';
+    document.body.appendChild(frame);
+    await new Promise((res) => { frame.onload = res; });
+    await sleep(300);
+
+    const w = frame.contentWindow, d = frame.contentDocument;
+    const q = (s) => d.querySelector(s);
+    const ls = () => w.localStorage.getItem(LS_KEY) || '';
+
+    if (mode === 'clear') {
+      d.getElementById('clearBtn').click();
+      await sleep(700);
+      lines.push('点「清空」后存档: ' + JSON.stringify(ls().slice(0, 70)));
+      done('cleared=' + (ls() === '' || !ls().includes('sk-')));
+      return;
+    }
+
+    if (mode === 'write') {
+      q('.pcard .btn-edit').click();
+      await sleep(250);
+      const keyIn = q('#panelBody .key-row input');
+      keyIn.value = 'sk-REFRESH-TEST-12345';
+      keyIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+      q('#panelSave').click();
+      await sleep(800);   // 等 300ms 防抖落盘
+      const stored = ls();
+      lines.push('写入后存档含 Key: ' + stored.includes('sk-REFRESH-TEST-12345'));
+      lines.push('  存档里的 apiKey: '
+        + JSON.stringify((stored.match(/"apiKey":"([^"]*)"/) || [])[1] || ''));
+      done('wrote=' + stored.includes('sk-REFRESH-TEST-12345'));
+      return;
+    }
+
+    // read：等价于用户按 F5（第二次加载，**没有清空**）
+    const cards = [...d.querySelectorAll('.pcard')];
+    lines.push('刷新后（第二次加载）：');
+    lines.push('  加载时存档里的 apiKey: '
+      + JSON.stringify(((before || '').match(/"apiKey":"([^"]*)"/) || [])[1] || ''));
+    lines.push('  连接卡数 = ' + cards.length + '（含 1 张添加卡）');
+    q('.pcard .btn-edit').click();
+    await sleep(300);
+    const keyIn = q('#panelBody .key-row input');
+    const got = keyIn ? keyIn.value : '(面板没开)';
+    const inPreview = (d.getElementById('preview').textContent.match(/"apiKey":"([^"]*)"/) || [])[1] || '';
+    lines.push('  面板里的 Key = ' + JSON.stringify(got));
+    lines.push('  预览里的 Key = ' + JSON.stringify(inPreview));
+    done('refreshKeepsKey=' + (got === 'sk-REFRESH-TEST-12345'));
+  } catch (e) {
+    lines.push('ERROR: ' + (e && e.stack || e));
+    done('ERROR ' + (e && e.message || e));
+  }
+})();
+</script>
+</body>
+</html>

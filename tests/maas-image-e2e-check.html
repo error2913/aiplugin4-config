@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>专属 URL + qwen-image 配置检查</title></head>
+<body>
+<pre id="out">running…</pre>
+<iframe id="frame" src="/index.html" width="1500" height="950"></iframe>
+<script>
+// 测试必须从**干净状态**开始：生成器会把草稿存 localStorage，
+// 上一次运行（或手动操作过页面）的存档会让断言基于错误的前提。
+try { localStorage.clear(); } catch (e) { /* 隐私模式等忽略 */ }
+
+// 复现用户的场景：**专属部署域名** + qwen-image-3.0-pro 生图。
+// 关键点：专属域名反查不出 vendor，必须选「百炼原生」模板把 provider 设成 dashscope；
+// 否则会落到 alibaba/通用预设，把 /images/generations 拼到原生路径后面 → 400 url error。
+const lines = [];
+const frame = document.getElementById('frame');
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+frame.onload = async () => {
+  try {
+    const w = frame.contentWindow, d = frame.contentDocument;
+    const q = (s) => d.querySelector(s);
+    const qa = (s) => [...d.querySelectorAll(s)];
+    const pqa = (s) => [...d.querySelectorAll('#panelBody ' + s)];
+    const preview = () => d.getElementById('preview').textContent;
+
+    const HOST = 'https://llm-w67ttc0b3gqiltm8.cn-beijing.maas.aliyuncs.com';
+
+    q('.pcard .btn-edit').click();
+    await sleep(120);
+
+    // 选「百炼原生」模板
+    const provSel = pqa('select')[0];
+    const dsOpt = [...provSel.options].find(o => o.textContent.includes('百炼原生'));
+    lines.push('供应商下拉含「百炼原生」: ' + !!dsOpt);
+    provSel.value = dsOpt.value;
+    provSel.dispatchEvent(new w.Event('change', { bubbles: true }));
+    await sleep(100);
+    lines.push('模板默认 URL: ' + q('#urlIn').value);
+
+    // 改成专属域名
+    const urlIn = q('#urlIn');
+    urlIn.value = HOST;
+    urlIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+    await sleep(80);
+    lines.push('改成专属域名后 URL: ' + urlIn.value);
+
+    // 供应商标识应仍是 dashscope（模板设的，不该被 URL 覆盖）
+    const vIn = pqa('.field input').find(i => i.getAttribute('list') === 'vendorOptions');
+    lines.push('供应商标识字段值: ' + JSON.stringify(vIn.value));
+    lines.push('生效提示: ' + (q('.detected-vendor') ? q('.detected-vendor').textContent : '(无)'));
+
+    // 填 key + 加模型
+    const keyIn = q('#panelBody .key-row input');
+    keyIn.value = 'sk-maas';
+    keyIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+    await sleep(60);
+    const mIn = q('#panelBody .models-input input');
+    mIn.value = 'qwen-image-3.0-pro';
+    q('#panelBody .models-input .btn').click();
+    await sleep(120);
+
+    const rows = pqa('.selected-list > .sel-row');
+    const imgRow = rows.find(r => /qwen-image/.test(r.querySelector('.sel-name').textContent));
+    lines.push('自动识别出的类型: ' + JSON.stringify(imgRow.querySelector('select').value));
+
+    d.getElementById('panelSave').click();
+    await sleep(150);
+
+    // 绑「文生图」
+    const ttiRow = qa('.purpose-block').find(r => /文生图/.test(r.querySelector('.purpose-label').textContent));
+    // 用途绑定已改卡片列表：找到该模型卡片并点击（角标会显示取用顺序）
+    const chip = [...ttiRow.querySelectorAll('.purpose-chip')].find(c => /qwen-image/.test(c.querySelector('.pc-name').textContent));
+    lines.push('文生图块里有该模型卡片: ' + !!chip);
+    if (chip) { chip.click(); await sleep(150); }
+
+    const cfg = JSON.parse(preview());
+    const p = cfg.providers[0];
+    const qm = p.models.find(m => /qwen-image/.test(m.name));
+    lines.push('');
+    lines.push('导出的连接:');
+    lines.push('  baseURL  = ' + p.baseURL);
+    lines.push('  provider = ' + JSON.stringify(p.provider));
+    lines.push('  模型     = ' + JSON.stringify(qm));
+    lines.push('  purposes = ' + JSON.stringify(cfg.purposes));
+
+    const ok = p.baseURL === HOST && p.provider === 'dashscope' && qm.kind === 'gen'
+        && Array.isArray(cfg.purposes['image-generation'])
+        && cfg.purposes['image-generation'][0] === qm.id;
+    lines.push('');
+    lines.push('SUMMARY maasConfigured=' + ok
+        + ' provider=' + JSON.stringify(p.provider)
+        + ' url=' + JSON.stringify(p.baseURL));
+
+    document.getElementById('out').textContent = lines.join('\n');
+    const s = document.createElement('div');
+    s.id = 'summary';
+    s.textContent = 'SUMMARY maasConfigured=' + ok
+        + ' provider=' + JSON.stringify(p.provider)
+        + ' url=' + JSON.stringify(p.baseURL);
+    document.body.appendChild(s);
+  } catch (e) {
+    document.getElementById('out').textContent = lines.join('\n') + '\n\nERROR: ' + (e && e.stack || e);
+    const s2 = document.createElement('div'); s2.id = 'summary';
+    s2.textContent = 'SUMMARY ERROR ' + (e && e.message || e);
+    document.body.appendChild(s2);
+  }
+};
+</script>
+</body>
+</html>

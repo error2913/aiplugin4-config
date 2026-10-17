@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>aiplugin4 配置生成器</title>
+<title>aiplugin4 配置生成器 v5</title>
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -11,38 +11,38 @@
 <header class="topbar">
   <div class="topbar-inner">
     <div class="brand">
-      <span class="brand-mark">🎲</span>
+      <span class="brand-mark" aria-hidden="true"></span>
       <div>
         <h1>aiplugin4 配置生成器</h1>
-        <p class="brand-sub">可视化填写「api连接」，生成可直接粘贴的 TOML</p>
+        <p class="brand-sub">可视化填写模型配置，生成可直接粘贴的 JSON</p>
       </div>
     </div>
-    <div class="version-badge" id="versionBadge" title="本工具的 TOML 格式对应此插件版本"></div>
+    <div class="version-badge" id="versionBadge"></div>
   </div>
 </header>
 
 <main class="layout">
 
-  <!-- 左：表单 -->
-  <section class="pane pane-form">
+  <!-- 左：连接与用途 -->
+  <section class="pane">
     <div class="pane-head">
-      <h2>API 连接</h2>
-      <button class="btn btn-ghost btn-sm" id="addConnBtn" type="button">+ 添加连接</button>
+      <h2>连接</h2>
+      <span class="pane-hint">顺序 = 插件里的连接顺序（决定默认模型取谁）</span>
     </div>
-    <p class="hint">
-      每个连接对应插件「模型 → api连接」里的<strong>一个配置框</strong>，自上而下即连接序号。
-    </p>
-    <div id="connList" class="conn-list"></div>
-    <div id="emptyState" class="empty-state" hidden>
-      <p>还没有连接。点「+ 添加连接」开始。</p>
+    <div id="cardList" class="card-grid"></div>
+
+    <div class="pane-head pane-head-2">
+      <h2>用途绑定</h2>
+      <span class="pane-hint">哪个用途用哪个模型</span>
     </div>
+    <div id="purposeList" class="purpose-list"></div>
   </section>
 
-  <!-- 右：预览与导出 -->
+  <!-- 右：输出 -->
   <section class="pane pane-output">
     <div class="pane-head">
-      <h2>生成的 TOML</h2>
-      <label class="toggle" title="导出时把 api_key 替换成占位符，便于分享截图">
+      <h2>生成的配置</h2>
+      <label class="toggle" title="导出时把 API Key 换成占位符，便于截图分享">
         <input type="checkbox" id="maskKey">
         <span>遮蔽 API Key</span>
       </label>
@@ -50,43 +50,69 @@
 
     <div id="validationBox" class="validation" hidden></div>
 
-    <div class="codewrap">
-      <pre id="preview" class="preview"></pre>
-    </div>
+    <pre id="preview" class="preview"></pre>
 
     <div class="actions">
       <button class="btn btn-primary" id="copyBtn" type="button">复制全部</button>
-      <button class="btn" id="downloadBtn" type="button">下载 .toml</button>
+      <button class="btn" id="downloadBtn" type="button">下载 .json</button>
+      <button class="btn" id="importBtn" type="button">导入…</button>
       <button class="btn" id="clearBtn" type="button">清空</button>
     </div>
-
-    <details class="import-box">
-      <summary>从已有配置导入</summary>
-      <p class="hint">
-        粘贴插件里「api连接」的框内容（或本工具导出的多框文本），解析回表单。
-      </p>
-      <textarea id="importText" rows="7" placeholder='api_key = "sk-xxx"&#10;provider = "deepseek"&#10;...'></textarea>
-      <div class="actions">
-        <button class="btn" id="importBtn" type="button">解析并导入</button>
-      </div>
-      <div id="importMsg" class="import-msg" hidden></div>
-    </details>
 
     <details class="usage-box">
       <summary>怎么用？</summary>
       <ol class="usage">
-        <li>填好下面的连接，上方会实时生成 TOML。</li>
-        <li>点「复制全部」，粘贴到 SealDice WebUI →「JS插件」→「插件设置」→ aiplugin4 →「模型」→ <strong>api连接</strong>。</li>
-        <li>多个连接就逐个框粘贴（插件是<strong>一框一条连接</strong>）。</li>
+        <li>点「+ 添加」或卡片上的「编辑」，在右侧面板里填好连接。</li>
+        <li>模型可以点「自动拉取模型列表」选，也可以手动输入；<strong>留空</strong>则插件启动时自己拉。</li>
+        <li>在「用途绑定」里指定各用途用哪个模型；<strong>留空</strong>则由插件按该用途的候选顺序取第一个。</li>
+        <li>点「复制全部」，粘到 SealDice WebUI →「JS插件」→「插件设置」→ aiplugin4 →「模型」→ <strong>模型配置</strong>。</li>
         <li>重载 JS 生效。</li>
+        <li>已有配置想接着改？点「<strong>导入…</strong>」把当前配置粘进来，改完再复制回去。</li>
       </ol>
       <p class="hint">
-        <strong>不会</strong>自动写入海豹 —— 纯静态页面无法访问你的海豹实例，只负责生成正确文本。
+        本工具<strong>不会</strong>自动写入海豹 —— 纯静态页面访问不到你的海豹实例，只负责生成正确文本。
       </p>
     </details>
   </section>
 
 </main>
+
+<!-- 导入对话框：粘一份已有配置进来接着改（导入是导出的逆） -->
+<div id="importBackdrop" class="backdrop" hidden></div>
+<aside id="importPanel" class="panel panel-import" hidden role="dialog" aria-modal="true" aria-labelledby="importTitle">
+  <header class="panel-head">
+    <h2 id="importTitle">导入配置</h2>
+    <button class="panel-x" id="importClose" type="button" title="关闭">×</button>
+  </header>
+  <div class="panel-body">
+    <div class="field-note">
+      粘贴一份 v5 配置（就是「模型配置」里的内容）。导入会<strong>替换</strong>当前所有连接与用途绑定。
+      校验不通过时不会改动任何东西。
+    </div>
+    <textarea id="importText" class="json-area" rows="14" spellcheck="false"
+      placeholder='{"version":5,"providers":[…],"purposes":{…}}'></textarea>
+    <div id="importMsg" class="json-err" hidden></div>
+    <div id="importWarn" class="import-warn" hidden></div>
+  </div>
+  <footer class="panel-foot">
+    <button class="btn" id="importCancel" type="button">取消</button>
+    <button class="btn btn-primary" id="importConfirm" type="button">导入</button>
+  </footer>
+</aside>
+
+<!-- 二级：编辑面板 -->
+<div id="panelBackdrop" class="backdrop" hidden></div>
+<aside id="panel" class="panel" hidden>
+  <div class="panel-head">
+    <h2 id="panelTitle">编辑连接</h2>
+    <button class="panel-x" id="panelClose" type="button" title="关闭">×</button>
+  </div>
+  <div id="panelBody" class="panel-body"></div>
+  <div class="panel-foot">
+    <button class="btn" id="panelCancel" type="button">取消</button>
+    <button class="btn btn-primary" id="panelSave" type="button">保存</button>
+  </div>
+</aside>
 
 <div id="toast" class="toast" hidden></div>
 

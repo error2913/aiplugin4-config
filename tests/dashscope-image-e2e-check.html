@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>百炼生图零配置检查</title></head>
+<body>
+<pre id="out">running…</pre>
+<iframe id="frame" src="/index.html" width="1500" height="950"></iframe>
+<script>
+// 测试必须从**干净状态**开始：生成器会把草稿存 localStorage，
+// 上一次运行（或手动操作过页面）的存档会让断言基于错误的前提。
+try { localStorage.clear(); } catch (e) { /* 隐私模式等忽略 */ }
+
+// 复现用户场景：用**官方**百炼 API 配 qwen-image-3.0-pro 生图。
+// 要证明的是：**不切「自定义 URL」、不填任何 URL、不写任何请求结构**，
+// 只要选「阿里百炼」模板 + 填 key + 把模型标成生图，导出的配置就能直接用。
+const lines = [];
+const frame = document.getElementById('frame');
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+frame.onload = async () => {
+  try {
+    const w = frame.contentWindow, d = frame.contentDocument;
+    const q = (s) => d.querySelector(s);
+    const qa = (s) => [...d.querySelectorAll(s)];
+    const preview = () => d.getElementById('preview').textContent;
+    const pqa = (s) => [...d.querySelectorAll('#panelBody ' + s)];
+
+    // 打开第一张卡的编辑面板
+    q('.pcard .btn-edit').click();
+    await sleep(120);
+
+    // 供应商下拉里应能找到「阿里百炼」
+    const provSel = pqa('select')[0];
+    const aliOpt = [...provSel.options].find(o => o.textContent.includes('阿里百炼'));
+    lines.push('供应商下拉含「阿里百炼」: ' + !!aliOpt);
+    provSel.value = aliOpt.value;
+    provSel.dispatchEvent(new w.Event('change', { bubbles: true }));
+    await sleep(100);
+
+    lines.push('切换后 URL: ' + q('#urlIn').value);
+    lines.push('接入方式仍是「供应商」模式（没被赶去自定义 URL）: '
+        + qa('.seg-btn')[0].classList.contains('active'));
+
+    // 填 key
+    const keyIn = q('#panelBody .key-row input');
+    keyIn.value = 'sk-official';
+    keyIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+    await sleep(60);
+
+    // 加 qwen-image 模型
+    const mIn = q('#panelBody .models-input input');
+    mIn.value = 'qwen-image-3.0-pro';
+    q('#panelBody .models-input .btn').click();
+    await sleep(120);
+
+    // 把它的类型改成「生图」
+    const rows = pqa('.selected-list > .sel-row');
+    const imgRow = rows.find(r => /qwen-image/.test(r.querySelector('.sel-name').textContent));
+    const kSel = imgRow.querySelector('select');
+    lines.push('');
+    lines.push('该模型默认识别出的类型: ' + JSON.stringify(kSel.value || '(不指定)'));
+    kSel.value = 'gen';
+    kSel.dispatchEvent(new w.Event('change', { bubbles: true }));
+    await sleep(80);
+
+    d.getElementById('panelSave').click();
+    await sleep(150);
+
+    // 绑定用途：文生图 → qwen-image
+    const purposeRows = qa('.purpose-block');
+    const ttiRow = purposeRows.find(r => /文生图/.test(r.querySelector('.purpose-label').textContent));
+    lines.push('所有用途块: ' + purposeRows.map(r => r.querySelector('.purpose-label').textContent + '(' + r.querySelectorAll('.purpose-chip').length + '张)').join(', '));
+    lines.push('保存后的配置: ' + preview().slice(0, 400));
+    // 模型 id 是 uniqueModelId 从名字生成的（点号转连字符）→ qwen-image-3-0-pro，不是 'qwen-image'
+    const chip = [...ttiRow.querySelectorAll('.purpose-chip')].find(c => /qwen-image/.test(c.querySelector('.pc-name').textContent));
+    lines.push('「文生图」卡片里有该模型: ' + !!chip);
+    if (chip) {
+        chip.click();
+        await sleep(150);
+    }
+
+    const cfg = JSON.parse(preview());
+    const p = cfg.providers[0];
+    lines.push('');
+    lines.push('导出的连接:');
+    lines.push('  baseURL = ' + p.baseURL);
+    lines.push('  provider = ' + JSON.stringify(p.provider));
+    lines.push('  api = ' + p.api);
+    lines.push('  模型 = ' + JSON.stringify(p.models));
+    lines.push('  purposes = ' + JSON.stringify(cfg.purposes));
+    lines.push('  有没有自定义 request: ' + ('request' in p.models[0]));
+    lines.push('  provider 字段: ' + JSON.stringify(p.provider) + '（undefined = 由插件按 URL 反查，不需要写）');
+
+    // provider **不该**写进配置：URL 已能反查出 alibaba，写了反而是冗余字段
+    // 注意别按 [0] 取 —— 默认连接里还留着出厂的 flash，要按名字找
+    const qm = p.models.find(m => /qwen-image/.test(m.name));
+    const clean = p.baseURL === 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+        && p.provider === undefined
+        && !!qm && !('request' in qm)
+        && qm.kind === 'gen'
+        && Array.isArray(cfg.purposes['image-generation'])
+        && /qwen-image/.test(cfg.purposes['image-generation'][0] || '');
+
+    lines.push('');
+    lines.push('SUMMARY zeroConfig=' + clean + ' url=' + JSON.stringify(p.baseURL));
+
+    document.getElementById('out').textContent = lines.join('\n');
+    const s = document.createElement('div');
+    s.id = 'summary';
+    s.textContent = 'SUMMARY zeroConfig=' + clean + ' url=' + JSON.stringify(p.baseURL);
+    document.body.appendChild(s);
+  } catch (e) {
+    document.getElementById('out').textContent = lines.join('\n') + '\n\nERROR: ' + (e && e.stack || e);
+    const s2 = document.createElement('div'); s2.id = 'summary';
+    s2.textContent = 'SUMMARY ERROR ' + (e && e.message || e);
+    document.body.appendChild(s2);
+  }
+};
+</script>
+</body>
+</html>

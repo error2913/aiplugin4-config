@@ -1,86 +1,149 @@
 # aiplugin4 配置生成器
 
-给 [aiplugin4](https://github.com/error2913/aiplugin4)（SealDice AI 插件）用的**「api连接」可视化生成器**。
+给 [aiplugin4](https://github.com/error2913/aiplugin4)（SealDice AI 插件）用的**模型配置可视化生成器**。
 
-勾选服务商 → 填 API Key → 勾模型 → 复制生成的 TOML 粘进海豹，不用手写那坨配置。
+点选供应商 → 填 API Key → 选模型 → 复制生成的 JSON 粘进海豹，不用手写配置。
 
-> **当前状态：本地 demo。** 零依赖纯静态页面，双击 `index.html` 即可跑。
-> 未做联网拉取模型列表、后端、跨设备同步。
+> **当前状态：v5 本地 demo。** 零依赖纯静态页面，双击 `index.html` 即可跑。
+> 面向 **v5 JSON 配置**（单框），插件侧尚未改造 —— 见下方「适配状态」。
 
 ## 为什么需要它
 
-插件的「api连接」是**手写 TOML**，而且有几个反直觉的硬性规则，写错了插件只在日志里丢一行错误、界面上表现为"模型莫名没了"：
+插件的模型配置是**手写 TOML**，而且有几个反直觉的硬性规则，写错了插件只在日志里丢一行、界面上表现为"模型莫名没了"：
 
 | 坑 | 后果 |
 | --- | --- |
-| `[types]` 表必须写在**本框最后**，其后不能再出现 `api_key` 等键 | 整框解析失败 |
-| 模型名含 `.` `:` `/` 时，`[types]` 的键**必须加引号** | 被解析成嵌套表，该键失效 |
-| `provider` 省略时必须显式填 `base_url` | 连接被跳过 |
-| 模型名带斜杠的（生图/语音模型常见） | 最容易踩上面第二条 |
+| `[types]` 表必须写在**本框最后** | 其后出现任何键 → 整框解析失败 |
+| 模型名含 `.` `:` `/` 时 `[types]` 键**必须加引号** | 被解析成嵌套表，该键失效 |
+| 规则靠**模型名字符串**匹配连接 | 改名/换清单 → 规则静默失配 |
+| 连接**框序**是语义（`[0]:模型名`） | 删/挪一个框，引用全部漂移 |
+| 用途绑定存在插件内部存储里 | 重装/迁移即丢 |
 
-本工具把 `[types]` **恒定排在末尾**、对特殊模型名**自动加引号**，从结构上杜绝这几类错误。
+v5 用**单个 JSON 配置**替换这些，生成器负责产出正确结构。
 
 ## 用法
 
-```
-双击 index.html
-```
-
-或起个本地服务（推荐，`file://` 下剪贴板 API 受限）：
-
 ```bash
-python -m http.server 8099
+node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 # 打开 http://127.0.0.1:8099/
 ```
 
-然后：
+**请用 `serve.mjs`，不要用 `python -m http.server`。** 后者**不发 `Cache-Control`**，
+浏览器于是按启发式缓存复用旧文件 —— 改了 `app.js` 按 F5 却仍跑旧代码，
+表现为"我明明改了它却没生效"（本轮排查 Key 持久化时就踩了这个坑，
+最后靠 Ctrl+F5 才确认修复其实早已生效）。
 
-1. 选服务商（自动填好默认 `base_url`），填 `api_key`，按需填 `models`
-2. 点「复制全部」
-3. 粘到 SealDice WebUI →「JS插件」→「插件设置」→ aiplugin4 →「模型」→ **api连接**
-4. **多个连接要逐个框粘贴** —— 插件是「一框一条连接」
-5. 重载 JS 生效
+`serve.mjs` 对所有响应发 `Cache-Control: no-store`，刷新必定拿到最新文件。
 
-> 本工具**不会**自动写入海豹。纯静态页面访问不到你的海豹实例，只负责生成正确文本。
+或直接双击 `index.html`（但 `file://` 下剪贴板 API 受限，建议起服务）。
+
+**操作流程**
+
+1. 点「+ 添加」或卡片上的「编辑」→ 右侧打开编辑面板
+2. 选**接入方式**：
+   - **模型供应商**：下拉选厂商，`api` 与 `baseURL` 自动填好
+   - **自定义 URL**：面向 one-api / new-api / 自建服务
+3. 填 **API Key**
+4. 展开**高级自定义** → 选模型：
+   - 点「**自动拉取模型列表**」，拉到后**点卡片多选**
+   - 或**手动输入**模型名（始终可用）
+5. 在**用途绑定**里点模型卡片指定各用途用哪些模型 —— **角标是取用顺序**（插件先用 1，失败时顺着 2、3… 往后切）。一个都不选 = 由插件按该用途候选的第一个取
+6. 点「**复制全部**」→ 粘到 SealDice WebUI →「JS插件」→「插件设置」→ aiplugin4 →「模型」→ **模型配置**
+7. 重载 JS 生效
+
+> 本工具**不会**自动写入海豹 —— 纯静态页面访问不到你的海豹实例，只负责生成正确文本。
 
 ## 功能
 
-- **内置 10 个供应商模板**：DeepSeek / 智谱 / 阿里百炼 / Google Gemini / Anthropic Claude / OpenAI / Moonshot / 硅基流动 / xAI / Mistral，各自带默认 `base_url` 与模型名示例
-- **自定义网关**：provider 留空 = 按 OpenAI 兼容处理（此时 `base_url` 必填，界面会拦住）
-- **实时预览**：右侧常驻显示生成的 TOML，带语法着色
-- **多连接**：每张卡片对应插件里一个配置框，卡片标题直接标出「连接序号 N」
-- **遮蔽 API Key**：导出时把 key 换成 `sk-xxxx`，方便截图分享
-- **反向导入**：粘贴已有 TOML 解析回表单（含行号报错定位）
+- **11 个内置供应商模板**，各带默认 `baseURL`、协议与模型名示例
+- **自动拉取模型列表**：浏览器直连 `GET /models`，结果做成可点击卡片多选
+- **自动预填模型类型**（`kind`）：识别嵌入/生图/语音模型，让配置显式化
+- **连接卡片**：每张卡 = 一个连接，可编辑/删除；顺序即插件里的连接顺序
+- **用途绑定**：8 个用途各一组模型卡片，点击绑定，**角标 = 取用顺序**（可绑多个，插件按顺序取用并在失败时往后回退）
+- **实时预览**：右侧常驻显示生成的 JSON，编辑过程中即时更新
+- **校验 + 路径报错**：`$.providers[1].models[0].kind` 形式指出问题，有问题时禁止复制
+- **遮蔽 API Key**：导出时换成 `sk-xxxx`，方便截图分享
 - **本地草稿**：自动存 localStorage
 
-### 关于 API Key 存储
+### 关于 API Key
 
-**默认不把 API Key 写入 localStorage。** 需要保留时得显式勾选「在本机记住 API Key」，界面会提示是明文存储。公用电脑别开。
+**API Key 永不写入 localStorage。** 草稿只保存连接结构与模型选择，`apiKey` 一律写空；刷新页面后需要重新填。
 
-## 适配版本
+这是刻意的取舍：不提供「记住 Key」功能。页面加载时还会顺手清掉旧版本可能残留在浏览器里的 Key。
 
-对应 **aiplugin4 v4.24.0**。
+配置文件本身按 v5 设计是**明文存 key**，所以分享配置前请用「遮蔽 API Key」。
 
-本工具与插件的 TOML 格式是硬耦合的：插件改了「api连接」的格式，这里生成的配置就可能失效。页面顶部有版本标注，核对插件版本再用。
+## 自动拉取模型列表的现实约束
 
-数据来源：`src/config/static_config/providers.ts` 的 `PROVIDER_MAP` 与 `src/config/configs/model.ts` 的模板定义。
+拉取是**浏览器直连供应商**，浏览器强制 CORS。实测（2026）：
+
+| 供应商 | 浏览器直连 |
+| --- | --- |
+| DeepSeek / 智谱 / 阿里百炼 / 硅基流动 / Moonshot | 是 放行 |
+| OpenRouter | 是 放行 |
+| Anthropic | 否 被 CORS 拦截 |
+| OpenAI / xAI / Mistral | 国内网络不可达，需自备代理 |
+
+**国内厂商全部放行**，所以「自动拉取」可作主入口；拉不动时会有明确提示，并随时可改手动输入。
+
+拉取时 API Key 由浏览器**直连**发给该供应商（无第三方经手）。本工具**绝不**使用公共 CORS 代理，也不引入任何后端。
+
+想自己复测：起服务后打开 `tests/cors-probe.html`。
+
+## 适配状态
+
+对应 **aiplugin4 v5 配置格式**（设计见插件仓库 `docs/13-模型配置v5方案.md`）。
+
+**插件侧尚未改造**，目前发布版仍读旧的两个 TOML 框（`api连接` / `模型规则`）。因此本 demo 产出的 JSON **暂时无法直接用于发布版插件**。
 
 ## 文件结构
 
 ```
-index.html          页面结构
-css/styles.css      样式
-js/templates.js     供应商模板数据（对应 PROVIDER_MAP）
-js/toml-gen.js      表单 -> TOML（[types] 置尾、特殊键加引号）
-js/toml-parse.js    迷你 TOML 解析（受限子集 + 行号报错）
-js/app.js           交互逻辑
+index.html            页面结构
+css/styles.css        样式
+js/templates.js       供应商模板（对应插件 PROVIDER_MAP）
+js/classify.js        模型类型分类（与插件 catalog.ts 同源，是其超集）
+js/v5.js              v5 配置的构建 / 校验 / 序列化
+js/fetch-models.js    模型列表拉取（含 CORS 降级 + 供应商自报能力位解析）
+js/app.js             交互逻辑
+tests/run.mjs         逻辑测试（250 项）
+tests/dom-test.html   浏览器交互测试（186 项）
+tests/close-check.html 面板关闭路径定点验证
+tests/purpose-check.html 用途绑定卡片 + 取用顺序角标检查（25 项）
+tests/vision-e2e-check.html 视觉模型端到端检查（桩 /models → 卡片标注 → 配置 kind）
+tests/override-e2e-check.html 请求覆盖端到端检查（逐字输入不失焦 / 非法 JSON 不清空配置）
+tests/import-e2e-check.html 导入导出往返检查（一致性 / 幂等 / 编辑后不冲掉其它字段）
+tests/dashscope-image-e2e-check.html 百炼生图零配置检查（不填 URL / 不写结构）
+tests/style-check.html   排版与动效检查（计算样式：字号下限/控件归一化/箭头旋转/无 emoji）
+tests/cors-probe.html CORS 实测工具
 ```
 
-## 关于「一键粘贴」
+## 视觉规范
 
-做不到字面意义的零粘贴。插件的配置入口是 `seal.ext.registerTemplateConfig`（一个框一个字符串），海豹没有给外部程序写入配置的通道，本工具也**不去驱动海豹 WebUI**（那需要浏览器内核，与"轻量"目标冲突）。
+| 项 | 约定 |
+| --- | --- |
+| 字号 | **一律 rem**，根字号保持 `100%`（跟随用户浏览器设置）。最小 **12px**，用 `max(rem, px)` 兜底 |
+| 正文 | 15px / 行高 1.65（中文需要比英文更松的行距） |
+| 控件 | `select` 用 `appearance: none` + 自绘 SVG 箭头 —— 各平台原生外观差异极大，不归一化谈不上跨平台 |
+| 原生控件配色 | `color-scheme: dark`，否则 Chromium 给白底下拉、Safari 给白底滚动条 |
+| 滚动条 | WebKit 走 `::-webkit-scrollbar`，Firefox 走 `scrollbar-color` / `scrollbar-width` |
+| 图标 | **不用 emoji，也不用 `▸`/`▾` 等字符**：emoji 各平台字形不一，字符箭头宽度随字体变。折叠箭头用 CSS 画的三角（可旋转、可动画） |
+| 用途角标 | 绑定的**序号**用数字而非勾选 —— "第几个"本身就是信息（决定插件取用与回退顺序） |
+| 动效 | 统一 `--dur` / `--ease`；必须提供 `prefers-reduced-motion` 降级 |
+| 浏览器 | `inset` 补 top/right/bottom/left 兜底；`backdrop-filter` 带 `-webkit-` 前缀；可选增强用 `@supports` 包裹 |
 
-所以做成了"生成正确文本 + 一键复制"，把"从零手写还容易写错"变成"粘贴"。
+**字号写死的坑（实测踩过）**：根元素上的 `rem` 按**初始字号（16px）**解析，
+所以 `html { font-size: .9375rem }` 会把根变成 15px，页面里**所有** rem 值整体缩水 6.25%
+（`0.75rem` 从 12px 掉到 11.25px）。**字号只在 `body` 上设。**
+
+## 测试
+
+```bash
+node tests/run.mjs        # 逻辑：250 项
+# 浏览器：起服务后打开
+#   tests/dom-test.html   交互：164 项
+#   tests/style-check.html 排版与动效：27 项
+```
 
 ## 免责
 

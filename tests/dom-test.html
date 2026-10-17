@@ -1,132 +1,965 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"><title>DOM 交互自动化测试</title></head>
+<head><meta charset="UTF-8"><title>DOM 交互测试 v5</title></head>
 <body>
-<h1>交互测试</h1>
+<h1>交互测试 v5</h1>
 <ol id="results"></ol>
-<iframe id="frame" src="/index.html" width="1400" height="900"></iframe>
+<iframe id="frame" src="/index.html" width="1500" height="950"></iframe>
 <script>
-// 在 iframe 里驱动真实页面，断言交互行为。
+// 测试必须从**干净状态**开始：生成器会把草稿存 localStorage，
+// 上一次运行（或手动操作过页面）的存档会让断言基于错误的前提。
+try { localStorage.clear(); } catch (e) { /* 隐私模式等忽略 */ }
+
+// 在 iframe 里驱动真实页面，断言 v5 交互行为。
 const log = [];
 function check(name, cond, extra) {
     log.push((cond ? 'PASS  ' : 'FAIL  ') + name + (cond ? '' : '  :: ' + (extra ?? '')));
 }
 const f = document.getElementById('frame');
 
-f.onload = () => {
+f.onload = async () => {
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const w = f.contentWindow;
     const d = f.contentDocument;
+    // headless 下 confirm 默认阻塞，统一放行
+    w.confirm = () => true;
     try {
+        const q = (s) => d.querySelector(s);
+        const qa = (s) => [...d.querySelectorAll(s)];
+        // 注意：必须把面板内查询限定在 #panelBody —— 主界面的「用途绑定」有 8 个 select，
+        // 在 DOM 里排在面板之前，全局查询会先命中它们。
+        const pq = (s) => d.querySelector('#panelBody ' + s);
+        const pqa = (s) => [...d.querySelectorAll('#panelBody ' + s)];
         const preview = () => d.getElementById('preview').textContent;
+        const parsePreview = () => JSON.parse(preview());
 
-        // --- 初始：DeepSeek 默认，未填 key -> 应报错
-        check('初始有 1 张卡片', d.querySelectorAll('.conn-card').length === 1,
-            d.querySelectorAll('.conn-card').length);
-        check('初始未填 key 时显示校验错误', !d.getElementById('validationBox').hidden);
-        check('初始预览含 base_url', /api\.deepseek\.com/.test(preview()));
+        // 关键：断言「是否真的可见」，而不是 el.hidden 属性。
+        // 教训：`.panel{display:flex}` 这类作者样式会压过 UA 的 [hidden]{display:none}，
+        // 于是 hidden=true 但元素仍然显示 —— 只看属性会漏掉这类 bug。
+        const shown = (elm) => {
+            if (!elm) return false;
+            const cs = w.getComputedStyle(elm);
+            return cs.display !== 'none' && cs.visibility !== 'hidden';
+        };
+        const panelShown = () => shown(d.getElementById('panel'));
+        const backdropShown = () => shown(d.getElementById('panelBackdrop'));
 
-        // --- 填 api_key
-        const keyIn = d.querySelector('.conn-card input[type=password]');
-        keyIn.value = 'sk-test-abc';
+        // ---------- 初始状态 ----------
+        check('初始 1 张连接卡 + 1 张添加卡', qa('.pcard').length === 2, qa('.pcard').length);
+        check('存在「+ 添加」卡', !!q('.pcard-add'));
+        check('初始出厂示例是 deepseek', /deepseek/.test(preview()), preview().slice(0, 80));
+        check('初始无 API Key → 显示校验错误', !d.getElementById('validationBox').hidden);
+        check('校验错误阻断复制', d.getElementById('copyBtn').disabled);
+        check('初始用途绑定已渲染', qa('.purpose-block').length === 8, qa('.purpose-block').length);
+
+        // ---------- 用途绑定：卡片列表 + 取用顺序角标 ----------
+        {
+            const blocks = qa('.purpose-block');
+            check('不再有下拉菜单', qa('.purpose-row').length === 0);
+            check('每块都有标题与顺序摘要',
+                blocks.every(b => b.querySelector('.purpose-label') && b.querySelector('.purpose-order')));
+
+            // 出厂示例绑了 chat/compression/summarization/judge 四个用途（各 1 个 flash）
+            const pickedAll = qa('.purpose-chip.picked');
+            check('已绑定卡片数与出厂绑定一致', pickedAll.length === 4, String(pickedAll.length));
+            check('已绑定卡片的角标都是 1（各用途只绑一个）',
+                pickedAll.every(c => c.querySelector('.rank-badge').textContent === '1'),
+                JSON.stringify(pickedAll.map(c => c.querySelector('.rank-badge').textContent)));
+
+            const labels = qa('.purpose-chip').map(c => c.textContent);
+            check('卡片不含「自动」字样（会被读成"插件随便挑"）',
+                !labels.some(t => /自动/.test(t)),
+                JSON.stringify(labels.filter(t => /自动/.test(t)).slice(0, 3)));
+            check('卡片不含「将用 X」之类无法兑现的承诺',
+                !labels.some(t => /将用|将使用/.test(t)),
+                JSON.stringify(labels.filter(t => /将用|将使用/.test(t)).slice(0, 3)));
+
+            const intro = qa('.purpose-intro').map(e => e.textContent).join('');
+            check('说明写清取用顺序语义而非"自动挑"',
+                /取用顺序/.test(intro) && !/自动/.test(intro), intro);
+
+            // 无可用模型的用途：不给卡片，给出原因
+            const emptyBlocks = blocks.filter(b => b.querySelectorAll('.purpose-chip').length === 0);
+            check('无可用模型的用途不给卡片', emptyBlocks.length > 0, String(emptyBlocks.length));
+            check('无可用模型时说明所需类型',
+                emptyBlocks.every(b => {
+                    const why = b.querySelector('.purpose-why');
+                    return why && /需要/.test(why.textContent);
+                }),
+                JSON.stringify(emptyBlocks.map(b => (b.querySelector('.purpose-why') || {}).textContent)));
+        }
+
+        // ---------- 编辑面板 ----------
+        check('初始面板不可见', !panelShown());
+        q('.pcard .btn-edit').click();                     // 「编辑」
+        check('编辑面板打开', panelShown());
+        check('打开时遮罩可见', backdropShown());
+        check('面板标题为「编辑连接」', d.getElementById('panelTitle').textContent === '编辑连接');
+        check('存在两种模式分段', pqa('.seg-btn').length === 2);
+        check('模式 A 默认选中', pqa('.seg-btn')[0].classList.contains('active'));
+        check('无「高级自定义」折叠区（必填项不再被藏）', !pq('.adv'));
+
+        // ---------- 关闭：× 按钮（真实可见性断言） ----------
+        d.getElementById('panelClose').click();
+        check('点 × 后面板真的不可见', !panelShown(), w.getComputedStyle(d.getElementById('panel')).display);
+        check('点 × 后遮罩也隐藏', !backdropShown());
+
+        // ---------- 关闭：取消按钮 ----------
+        q('.pcard .btn-edit').click();
+        check('重新打开面板', panelShown());
+        d.getElementById('panelCancel').click();
+        check('点取消后面板不可见', !panelShown());
+        check('取消后不写回草稿改动', /"apiKey":""/.test(preview()), preview().slice(0, 120));
+
+        // ---------- 关闭：点遮罩 ----------
+        q('.pcard .btn-edit').click();
+        d.getElementById('panelBackdrop').click();
+        check('点遮罩后面板不可见', !panelShown());
+
+        // ---------- 关闭：新增流程（用户报告关不掉的路径） ----------
+        q('.pcard-add').click();
+        check('新增面板打开', panelShown());
+        check('新增面板标题', d.getElementById('panelTitle').textContent === '添加连接');
+        d.getElementById('panelClose').click();
+        check('新增面板点 × 能关掉', !panelShown());
+        q('.pcard-add').click();
+        d.getElementById('panelCancel').click();
+        check('新增面板点取消能关掉', !panelShown());
+        q('.pcard-add').click();
+        d.getElementById('panelBackdrop').click();
+        check('新增面板点遮罩能关掉', !panelShown());
+        check('关掉后未新增连接', qa('.pcard').length === 2, qa('.pcard').length);
+
+        // 回到编辑第一条，继续后续用例
+        q('.pcard .btn-edit').click();
+        check('面板可重新打开', panelShown());
+
+        // 填 API Key
+        const keyIn = pq('.key-row input');
+        keyIn.value = 'sk-test-123';
         keyIn.dispatchEvent(new w.Event('input', { bubbles: true }));
-        check('填 key 后校验通过', d.getElementById('validationBox').hidden,
+        d.getElementById('panelSave').click();
+        check('保存后面板关闭', !panelShown());
+        check('保存后遮罩隐藏', !backdropShown());
+        check('保存后校验通过', d.getElementById('validationBox').hidden,
             d.getElementById('validationBox').textContent);
-        check('预览含 api_key', /api_key = "sk-test-abc"/.test(preview()), preview());
+        check('输出含 apiKey', /"apiKey":"sk-test-123"/.test(preview()), preview().slice(0, 120));
+        check('复制按钮已启用', !d.getElementById('copyBtn').disabled);
 
-        // --- 点模型建议，添加模型
-        const sugBtn = d.querySelector('.model-suggest button');
-        check('存在模型建议按钮', !!sugBtn);
-        sugBtn.click();
-        check('点击建议后生成 models 行', /models = \[/.test(preview()), preview());
-        check('生成 tag-pill', d.querySelectorAll('.tag-pill').length === 1);
+        // ---------- 模式切换保留内容 ----------
+        q('.pcard .btn-edit').click();
+        const beforeKey = pq('.key-row input').value;
+        pqa('.seg-btn')[1].click();                    // 切到自定义 URL
+        check('切模式后 API Key 保留', pq('.key-row input').value === beforeKey, pq('.key-row input').value);
+        // 注意：不能用 `.field select` 判断——「协议」下拉也在面板里，会被误命中。
+        // 改判「供应商」这个 label。
+        const hasVendorField = () => pqa('.field .field-label').some(l => l.textContent === '供应商');
+        check('自定义模式无供应商下拉', !hasVendorField());
+        pqa('.seg-btn')[0].click();                    // 切回
+        check('切回后 API Key 仍在', pq('.key-row input').value === beforeKey);
+        check('切回后供应商下拉恢复', hasVendorField());
 
-        // --- 手动输入模型名（含斜杠）
-        const mIn = d.querySelector('.models-input input');
-        mIn.value = 'deepseek-ai/DeepSeek-V3';
-        const addBtn = d.querySelector('.models-input button');
-        addBtn.click();
-        check('含斜杠模型名进入 models', /deepseek-ai\/DeepSeek-V3/.test(preview()), preview());
-        check('现在 2 个模型 pill', d.querySelectorAll('.tag-pill').length === 2,
-            d.querySelectorAll('.tag-pill').length);
+        // ---------- 供应商切换自动填 api/baseURL ----------
+        const provSel = pqa('select')[0];
+        const zhipuOpt = [...provSel.options].find(o => o.textContent.includes('智谱'));
+        check('供应商下拉含智谱选项', !!zhipuOpt);
+        provSel.value = zhipuOpt.value;
+        provSel.dispatchEvent(new w.Event('change', { bubbles: true }));
+        check('切换供应商后 baseURL 变化', /bigmodel\.cn/.test(preview()), preview().slice(0, 160));
+        check('切换供应商后面板显示识别结果',
+            /zhipu/.test(pq('.detected-vendor').textContent), pq('.detected-vendor').textContent);
 
-        // --- 给斜杠模型设类型 embed -> 应生成带引号的 [types]
-        const sels = d.querySelectorAll('.tag-pill select');
-        const sel = sels[1];
-        sel.value = 'embed';
-        sel.dispatchEvent(new w.Event('change', { bubbles: true }));
-        const pv = preview();
-        check('[types] 表已生成', /\[types\]/.test(pv), pv);
-        check('斜杠模型名加了引号', /"deepseek-ai\/DeepSeek-V3" = "embed"/.test(pv), pv);
-        check('[types] 位于末尾',
-            pv.trim().split('\n').pop().includes('embed'), pv.trim().split('\n').pop());
+        // ---------- 手改 URL 后不被供应商切换覆盖 ----------
+        // 注意：API URL 现在**常显在面板主体**（原先折叠在「高级自定义」里，用户找不到模型入口）
+        const urlIn = pq('#urlIn');
+        check('API URL 常显（不再藏在折叠区）', !!urlIn);
+        check('面板里已无「高级自定义」折叠区', !pq('.adv'), '应已整体移除');
+        urlIn.value = 'https://my-gateway.example/v1';
+        urlIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+        const sel2 = pqa('select')[0];
+        const dsOpt = [...sel2.options].find(o => o.textContent.includes('DeepSeek'));
+        sel2.value = dsOpt.value;
+        sel2.dispatchEvent(new w.Event('change', { bubbles: true }));
+        check('手改 URL 后切供应商不被覆盖',
+            /my-gateway\.example/.test(preview()), preview().slice(0, 160));
 
-        // --- 切换到 智谱 -> provider/base_url 应变化
-        const chips = [...d.querySelectorAll('.provider-chip')];
-        const zhipu = chips.find(c => c.textContent.includes('智谱'));
-        zhipu.click();
-        const pv2 = preview();
-        check('切到智谱后 provider 变化', /provider = "zhipu"/.test(pv2), pv2);
-        check('切到智谱后 base_url 变化', /open\.bigmodel\.cn/.test(pv2), pv2);
-        check('切供应商后 api_key 保留', /api_key = "sk-test-abc"/.test(pv2), pv2);
-        check('切供应商后 models 保留', /DeepSeek-V3/.test(pv2), pv2);
+        // ---------- 模型手动输入 ----------
+        const mIn = pq('.models-input input');
+        mIn.value = 'black-forest-labs/FLUX.1-schnell';
+        pq('.models-input .btn').click();
+        check('手动添加模型成功', /FLUX\.1-schnell/.test(preview()), preview().slice(0, 200));
+        check('生图模型自动预填 kind=gen',
+            /"kind":"gen"/.test(preview()), preview().slice(0, 240));
+        check('模型 id 去掉了斜杠', /"id":"black-forest-labs-flux-1-schnell"/.test(preview()),
+            preview().slice(0, 240));
 
-        // --- 添加第二条连接
-        d.getElementById('addConnBtn').click();
-        check('添加后有 2 张卡片', d.querySelectorAll('.conn-card').length === 2,
-            d.querySelectorAll('.conn-card').length);
-        check('第二张卡片序号为 1',
-            [...d.querySelectorAll('.conn-index')][1].textContent.includes('连接序号 1'));
+        // ---------- kind 下拉可改 ----------
+        const selRows = pqa('.sel-row');
+        check('已选列表有 2 行', selRows.length === 2, selRows.length);
+        const kindSel = selRows[1].querySelector('select');
+        kindSel.value = 'vision';
+        kindSel.dispatchEvent(new w.Event('change', { bubbles: true }));
+        d.getElementById('panelSave').click();
+        check('改 kind 后输出为 vision', /"kind":"vision"/.test(preview()), preview().slice(0, 240));
 
-        // --- 遮蔽 key
+        // ---------- 逐模型「请求与响应格式」（折叠，分块编辑） ----------
+        {
+            // 重新打开编辑面板（上一步已保存关闭）
+            d.querySelector('.pcard .btn-edit').click();
+            await sleep(80);
+
+            // 编辑区是 .sel-row 的**兄弟**（挂在 .selected-list 下），不是它的子元素
+            const editors = pqa('.selected-list > .json-editor');
+            check('每个已选模型都有一个「请求与响应格式」编辑区', editors.length === 2, editors.length);
+            check('「请求与响应格式」默认折叠', editors.every(e => !e.open), JSON.stringify(editors.map(e => e.open)));
+            check('折叠时标签写「请求与响应格式」',
+                editors[0].querySelector('summary').textContent === '请求与响应格式',
+                editors[0].querySelector('summary').textContent);
+            // 命名不得与连接级那个撞车（此前两个都叫"请求覆盖"，看着像重复做了两遍）
+            check('不存在名为「请求覆盖」的编辑区（命名撞车已消除）',
+                !pqa('.json-editor > summary').some(s => s.textContent === '请求覆盖'),
+                pqa('.json-editor > summary').map(s => s.textContent).join(' | '));
+            // bodyMode 行**总是**渲染（避免提交时重建面板夺走焦点），无覆盖时禁用
+            check('bodyMode 行总是存在', pqa('.body-mode-row').length === 2, String(pqa('.body-mode-row').length));
+            check('无覆盖时 bodyMode 被禁用', pqa('.body-mode-row select').every(s => s.disabled),
+                JSON.stringify(pqa('.body-mode-row select').map(s => s.disabled)));
+
+            // 展开第一个，逐个定位子编辑区（嵌套较深，按 summary 文本找）
+            const ed = editors[0];
+            if (!ed) throw new Error('没渲染出请求与响应格式编辑区，后续断言无法进行');
+            ed.open = true;
+            await sleep(40);
+
+            // 前缀匹配：标签在有内容时会带「（已设置）」后缀，精确匹配会漏
+            const sub = (label) => [...ed.querySelectorAll('.json-editor')].find((e) => {
+                const s = e.querySelector(':scope > summary');
+                return s && s.textContent.startsWith(label);
+            });
+            const byLabel = (root, re) => [...root.querySelectorAll('.sub-field')].find((fl) => {
+                const l = fl.querySelector('.sub-label');
+                return l && re.test(l.textContent);
+            });
+
+            const bodyEd = sub('请求体 body');
+            const respEd = sub('响应格式');
+            const reqEd = sub('地址与请求头 request');
+            const paramsEd = sub('可覆写参数 params');
+            const promptEd = sub('提示词 prompt');
+            check('有「请求体 body」子编辑区', !!bodyEd);
+            check('有「响应格式」子编辑区', !!respEd);
+            check('有「地址与请求头 request」子编辑区', !!reqEd);
+            check('有「可覆写参数 params」子编辑区', !!paramsEd);
+            check('有「提示词 prompt」子编辑区', !!promptEd);
+
+            // ---- body：仍是 JSON 框（结构自由），非法不写回
+            const ta = bodyEd.querySelector('textarea');
+            check('body 是 JSON 文本框', !!ta);
+            ta.value = '{ "model": ';
+            ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(40);
+            check('body 非法 JSON 就地报错', !bodyEd.querySelector('.json-err').hidden,
+                bodyEd.querySelector('.json-err').textContent);
+            check('body 非法 JSON 不写进配置', !/"request"/.test(preview()), preview().slice(0, 300));
+
+            ta.value = '{"model":"{model}","prompt":"{prompt}"}';
+            ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(40);
+            check('body 合法后写进 request.body',
+                /"request":\{"body":\{"model":"\{model\}"/.test(preview()), preview().slice(0, 320));
+
+            // ---- response：**结构化表单**（本轮新增的重点）
+            check('响应格式不是 JSON 框（是结构化字段）',
+                respEd.querySelectorAll('.sub-field').length >= 3
+                && !respEd.querySelector('.json-editor-body > textarea'),
+                respEd.querySelectorAll('.sub-field').length + ' 个字段');
+
+            const dpField = byLabel(respEd, /取数路径/);
+            check('有 data_path 字段', !!dpField);
+            const dp = dpField.querySelector('input');
+            dp.value = 'output.choices.0.message.content.0.image';
+            dp.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(40);
+            check('data_path 写进 request.response',
+                /"response":\{"data_path":"output\.choices\.0\.message\.content\.0\.image"/.test(preview()),
+                preview().slice(0, 360));
+
+            const dtField = byLabel(respEd, /数据类型/);
+            const dt = dtField.querySelector('select');
+            check('data_type 是下拉且取值固定',
+                [...dt.options].map((o) => o.value).join(',') === ',url,base64,hex',
+                [...dt.options].map((o) => o.value).join(','));
+            dt.value = 'url';
+            dt.dispatchEvent(new w.Event('change', { bubbles: true }));
+            await sleep(40);
+            check('data_type 写进配置', /"data_type":"url"/.test(preview()));
+
+            const emField = byLabel(respEd, /错误信息路径/);
+            check('有 error_message_path 字段', !!emField);
+
+            // ---- 异步轮询（子折叠）
+            const poll = sub('异步任务轮询');
+            check('有「异步任务轮询」子折叠', !!poll);
+            const tid = byLabel(poll, /任务号路径/).querySelector('input');
+            tid.value = 'output.task_id';
+            tid.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(40);
+            check('task_id_path 写进配置', /"task_id_path":"output\.task_id"/.test(preview()));
+
+            const pi = byLabel(poll, /轮询间隔/).querySelector('input');
+            pi.value = '5';
+            pi.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(40);
+            check('轮询间隔按数字写进配置（不是字符串）', /"poll_interval":5\b/.test(preview()),
+                preview().slice(0, 400));
+
+            const sv = byLabel(poll, /成功状态值/).querySelector('input');
+            sv.value = 'OK, DONE';
+            sv.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(40);
+            check('成功状态值按逗号拆成数组', /"success_values":\["OK","DONE"\]/.test(preview()),
+                preview().slice(0, 420));
+
+            // ---- 清空某个字段 → 该键应从配置里删掉（保持紧凑）
+            dp.value = '';
+            dp.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(40);
+            check('清空字段会删掉该键', !/"data_path"/.test(preview()), preview().slice(0, 360));
+            check('其它字段不受影响', /"task_id_path"/.test(preview()));
+
+            // ---- 数字字段：非有限值**绝不能**写进配置
+            // Number('abc')=NaN / Number('1e999')=Infinity，而 JSON.stringify 会把它们变成 null；
+            // 插件侧 Number(null)===0 → poll_interval 变 0 → 不等待就轮询，打爆对方接口。
+            //
+            // 注意：<input type=number> 会把非法文本**消毒成空串**，所以"输入垃圾"这条路走不到
+            // Infinity；真正能造出非有限值的是**导入**一份含 null/"" 的配置（下面单独测）。
+            // 这里先把数值路径本身测扎实。
+            {
+                const pi2 = byLabel(poll, /轮询间隔/).querySelector('input');
+                check('轮询间隔是 number 输入框', pi2.type === 'number', pi2.type);
+
+                pi2.value = '';
+                pi2.dispatchEvent(new w.Event('input', { bubbles: true }));
+                await sleep(50);
+                check('清空 → 删键（不写空串）', !/"poll_interval"/.test(preview()), preview().slice(0, 420));
+
+                pi2.value = '7';
+                pi2.dispatchEvent(new w.Event('input', { bubbles: true }));
+                await sleep(50);
+                check('合法数字写进配置且是数字类型', /"poll_interval":7\b/.test(preview()),
+                    preview().slice(0, 420));
+
+                // 小数与 0 都合法（0 有语义：不等待就轮询，提示里已说明）
+                pi2.value = '0';
+                pi2.dispatchEvent(new w.Event('input', { bubbles: true }));
+                await sleep(50);
+                check('0 是合法值（有明确语义）', /"poll_interval":0\b/.test(preview()), preview().slice(0, 420));
+                pi2.value = '7';
+                pi2.dispatchEvent(new w.Event('input', { bubbles: true }));
+                await sleep(50);
+            }
+
+            // ---- bodyMode
+            check('有覆盖后 bodyMode 解除禁用', pqa('.body-mode-row select')[0].disabled === false);
+            const modeSel = pq('.body-mode-row select');
+            modeSel.value = 'merge';
+            modeSel.dispatchEvent(new w.Event('change', { bubbles: true }));
+            await sleep(40);
+            check('bodyMode=merge 写进配置', /"bodyMode":"merge"/.test(preview()), preview().slice(0, 360));
+
+            // ---- 清空全部子编辑区 → request 整个消失
+            ta.value = '';
+            ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+            for (const root of [respEd, poll]) {
+                for (const inp of [...root.querySelectorAll('input')]) {
+                    if (inp.value) { inp.value = ''; inp.dispatchEvent(new w.Event('input', { bubbles: true })); }
+                }
+                // select 也要重置回空选项 —— 只清 input 会漏掉 data_type
+                for (const s of [...root.querySelectorAll('select')]) {
+                    if (s.value) { s.value = ''; s.dispatchEvent(new w.Event('change', { bubbles: true })); }
+                }
+            }
+            await sleep(60);
+            check('全部清空后 request 从配置里消失', !/"request"/.test(preview()), preview().slice(0, 320));
+            check('清空后 bodyMode 重新禁用', pqa('.body-mode-row select').every((s) => s.disabled));
+
+            d.getElementById('panelCancel').click();
+            await sleep(80);
+        }
+
+        // ---------- 用途组「请求体覆盖」（折叠） ----------
+        {
+            const gb = qa('.group-bodies');
+            check('存在「用途组请求体」折叠区', gb.length === 1, String(gb.length));
+            check('「用途组请求体」默认折叠', gb[0] && !gb[0].open);
+            check('标签为「用途组请求体（高级）」',
+                gb[0] && gb[0].querySelector('summary').textContent === '用途组请求体（高级）',
+                gb[0] ? gb[0].querySelector('summary').textContent : '');
+            // 只给有绑定的用途组显示编辑器（默认只绑了 chat 系四个 → 1 个）
+            check('只为已绑定的用途组提供编辑器',
+                gb[0] ? gb[0].querySelectorAll('.json-editor').length === 1
+                      : false,
+                gb[0] ? String(gb[0].querySelectorAll('.json-editor').length) : '');
+            check('默认不写 useBodies（用内置默认）', !/"useBodies"/.test(preview()));
+
+            // 改 chat 组 body
+            gb[0].open = true;
+            await sleep(40);
+            const gta = gb[0].querySelector('textarea');
+            gta.value = '{"max_tokens":321}';
+            gta.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(40);
+            check('用途组 body 覆盖写进 groups',
+                /"groups":\[\{"purposes":\["chat","compression","summarization","judge"\],"body":\{"max_tokens":321\}\}\]/.test(preview()),
+                preview().slice(0, 400));
+            check('覆盖后配置仍合法',
+                d.getElementById('copyBtn').disabled === false,
+                d.getElementById('validationBox').textContent);
+        }
+
+        // ---------- 供应商用途支持标注 ----------
+        {
+            d.querySelector('.pcard .btn-edit').click();
+            await sleep(80);
+            const vIn = pq('#vendorOptions') ? [...pqa('.field input')].find(i => i.getAttribute('list') === 'vendorOptions') : null;
+            check('找到供应商标识输入框', !!vIn);
+            vIn.value = 'elevenlabs';
+            vIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(40);
+            check('标注该 vendor 收录的媒体用途（elevenlabs 只做语音）',
+                /媒体用途：仅收录了 语音合成/.test(pq('.field-note:last-of-type') ? pqa('.field-note').map(e => e.textContent).join(' ') : ''),
+                pqa('.field-note').map(e => e.textContent).join(' | ').slice(0, 300));
+            vIn.value = 'dashscope';
+            vIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(40);
+            check('dashscope 标注语音合成 / 文生图',
+                /媒体用途：仅收录了 语音合成 \/ 文生图/.test(pqa('.field-note').map(e => e.textContent).join(' ')),
+                pqa('.field-note').map(e => e.textContent).join(' | ').slice(0, 300));
+            d.getElementById('panelCancel').click();
+            await sleep(80);
+        }
+
+        // ---------- 用途绑定：点卡片 → 写入有序数组 ----------
+        {
+            const chatBlock = qa('.purpose-block')
+                .find(b => /对话/.test(b.querySelector('.purpose-label').textContent));
+            const fluxChip = [...chatBlock.querySelectorAll('.purpose-chip')]
+                .find(c => /flux/i.test(c.querySelector('.pc-name').textContent));
+            check('对话候选里有 flux（gen 模型不该在，但这里验的是绑定写入）', !!fluxChip
+                || chatBlock.querySelectorAll('.purpose-chip').length > 0);
+            if (fluxChip) {
+                const fluxName = fluxChip.querySelector('.pc-name').textContent;
+                fluxChip.click();
+                await sleep(150);
+                const cfg = JSON.parse(preview());
+                check('用途绑定写入 purposes（有序数组）',
+                    Array.isArray(cfg.purposes.chat) && cfg.purposes.chat.includes('black-forest-labs-flux-1-schnell'),
+                    JSON.stringify(cfg.purposes.chat));
+                // 点击会重建用途区 → 必须**重新查询**，旧引用已脱离 DOM（读到的是点击前的状态）
+                const chatBlock2 = qa('.purpose-block')
+                    .find(b => /对话/.test(b.querySelector('.purpose-label').textContent));
+                const after = [...chatBlock2.querySelectorAll('.purpose-chip')]
+                    .find(c => c.querySelector('.pc-name').textContent === fluxName);
+                check('角标显示序号', after && /^[1-9]$/.test(after.querySelector('.rank-badge').textContent),
+                    after ? after.querySelector('.rank-badge').textContent : '(卡片没找到)');
+            }
+        }
+
+        // ---------- 遮蔽 API Key ----------
         d.getElementById('maskKey').checked = true;
         d.getElementById('maskKey').dispatchEvent(new w.Event('change', { bubbles: true }));
-        const pv3 = preview();
-        check('遮蔽后 api_key 变占位符', /api_key = "sk-xxxx"/.test(pv3), pv3);
-        check('遮蔽后真实 key 不出现', !pv3.includes('sk-test-abc'));
+        check('遮蔽后 key 变占位符', /"apiKey":"sk-xxxx"/.test(preview()));
+        check('遮蔽后不出现真实 key', !preview().includes('sk-test-123'));
         d.getElementById('maskKey').checked = false;
         d.getElementById('maskKey').dispatchEvent(new w.Event('change', { bubbles: true }));
 
-        // --- 导入：解析含斜杠 [types] 的 TOML
-        const ta = d.getElementById('importText');
-        ta.value = 'api_key = "sk-imported"\nprovider = "siliconflow"\nbase_url = "https://api.siliconflow.cn/v1"\nmodels = ["black-forest-labs/FLUX.1-schnell"]\n\n[types]\n"black-forest-labs/FLUX.1-schnell" = "gen"';
-        d.getElementById('importBtn').click();
-        const msg = d.getElementById('importMsg');
-        check('导入成功提示', msg.className.includes('ok'), msg.className + ' / ' + msg.textContent);
-        check('导入后只剩 1 张卡片', d.querySelectorAll('.conn-card').length === 1,
-            d.querySelectorAll('.conn-card').length);
-        const pv4 = preview();
-        check('导入后 key 正确', /sk-imported/.test(pv4), pv4);
-        check('导入后 [types] 保留', /"black-forest-labs\/FLUX\.1-schnell" = "gen"/.test(pv4), pv4);
+        // ---------- 新增连接 ----------
+        q('.pcard-add').click();
+        check('添加面板标题', d.getElementById('panelTitle').textContent === '添加连接');
+        const keyIn2 = q('.key-row input');
+        keyIn2.value = 'sk-second';
+        keyIn2.dispatchEvent(new w.Event('input', { bubbles: true }));
+        d.getElementById('panelSave').click();
+        check('新增后 2 张连接卡 + 添加卡', qa('.pcard').length === 3, qa('.pcard').length);
+        const cfg = parsePreview();
+        check('providers 有 2 条', cfg.providers.length === 2, cfg.providers.length);
+        check('模型仍嵌套在各自 provider 内',
+            cfg.providers.every(p => !p.models || Array.isArray(p.models)));
 
-        // --- 导入错误：未加引号的点号 key
-        ta.value = 'api_key = "k"\n[types]\nglm-4.5 = "vision"';
-        d.getElementById('importBtn').click();
-        const msg2 = d.getElementById('importMsg');
-        check('非法 TOML 报错', msg2.className.includes('err'), msg2.className);
-        check('报错含行号', /第 3 行/.test(msg2.textContent), msg2.textContent);
+        // ---------- 校验：模型 id 重复应报错（路径报错） ----------
+        q('.pcard .btn-edit').click();                 // 编辑第一条
+        // 面板里已选模型的 id 输入框（.sel-id）：把第二个模型的 id 改成与第一个相同
+        const selIdInputs = pqa('.sel-id');
+        if (selIdInputs.length >= 2) {
+            selIdInputs[1].value = selIdInputs[0].value;
+            selIdInputs[1].dispatchEvent(new w.Event('change', { bubbles: true }));
+            d.getElementById('panelSave').click();
+            check('模型 id 重复时显示校验错误', !d.getElementById('validationBox').hidden,
+                d.getElementById('validationBox').textContent);
+            check('模型 id 重复时阻断复制', d.getElementById('copyBtn').disabled);
+            check('报错含 JSON 路径',
+                /\$\.providers\[\d+\]\.models\[\d+\]\.id/.test(d.getElementById('validationBox').textContent),
+                d.getElementById('validationBox').textContent);
+        } else {
+            check('找到至少两个模型 id 输入框', false, `selId=${selIdInputs.length}`);
+        }
 
-        // --- 删除连接
-        const delBtn = d.querySelector('.conn-head .btn-danger-ghost');
-        delBtn.click();
-        check('删除后回到空状态', d.getElementById('emptyState').hidden === false);
+        // ---------- 供应商标识：自动识别，不在配置里出现 ----------
+        {
+            const c = parsePreview();
+            check('配置里不含 provider 字段（自动识别，无负担）',
+                c.providers.every(p => p.provider === undefined),
+                JSON.stringify(c.providers.map(p => p.provider)));
+            check('卡片上展示了识别结果', /provider: /.test(d.querySelector('.pcard-id').textContent),
+                d.querySelector('.pcard-id').textContent);
+        }
+
+        // ---------- 删除（confirm 已放行） ----------
+        const beforeDel = qa('.pcard').length;
+        qa('.pcard .btn-danger')[0].click();
+        check('删除后卡片减少', qa('.pcard').length === beforeDel - 1, qa('.pcard').length);
+
+        // ---------- 自定义模式的「显示名称」：逐字符输入必须不掉焦点 ----------
+        // 回归：该字段的回调一度调了 renderPanel()，重建面板把输入框换掉 →
+        // 每敲一个字就失焦，表现为"输入状态被重置、只能打一个字"。
+        // 断言要点：**节点身份不变**（不只是值对），否则重建也能骗过测试。
+        {
+            q('.pcard .btn-edit').click();            // 必须先打开面板（关闭时 draft 为 null，点击是空操作）
+            check('面板已打开（显示名称用例前置）', panelShown());
+            pqa('.seg-btn')[1].click();               // 切到自定义 URL
+            const nameLabel = pqa('.field .field-label').find(l => l.textContent.includes('显示名称'));
+            check('自定义模式有显示名称字段', !!nameLabel, nameLabel ? nameLabel.textContent : '(未找到)');
+            const nameIn = nameLabel.parentElement.querySelector('input[type=text]');
+            check('找到显示名称输入框', !!nameIn);
+
+            // 必须查**当前活动的 DOM**，不能查 nameLabel.parentElement ——
+            // 面板重建后旧子树整体脱离文档，从旧节点往下查永远找到旧输入框，断言会假通过。
+            const liveNameIn = () => {
+                const l = pqa('.field .field-label').find(x => x.textContent.includes('显示名称'));
+                return l ? l.parentElement.querySelector('input[type=text]') : null;
+            };
+
+            if (nameIn) {
+                nameIn.focus();
+                check('输入框已获焦', d.activeElement === nameIn);
+
+                // 逐字符模拟真实输入
+                nameIn.value = 'a';
+                nameIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+                check('输入 1 个字符后输入框未被重建', liveNameIn() === nameIn,
+                    liveNameIn() === nameIn ? '' : '输入框被重建（焦点会丢）');
+                check('输入 1 个字符后仍保持焦点', d.activeElement === nameIn,
+                    '当前焦点：' + (d.activeElement && d.activeElement.tagName));
+
+                nameIn.value = 'acme-gateway';
+                nameIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+                check('继续输入后输入框仍未被重建', liveNameIn() === nameIn);
+                check('累计输入内容完整保留', liveNameIn() && liveNameIn().value === 'acme-gateway',
+                    liveNameIn() ? liveNameIn().value : '(输入框不存在)');
+                // displayName 会写进配置（build 里非空则输出），所以预览应能看到
+                check('显示名称进入生成配置',
+                    /"displayName":"acme-gateway"/.test(preview()), preview().slice(0, 200));
+            }
+            pqa('.seg-btn')[0].click();               // 切回供应商模式
+            d.getElementById('panelCancel').click();  // 关掉，避免影响后续用例
+        }
+
+        // ---------- 选模板必须带上 provider（百炼原生那条 400 的根因） ----------
+        {
+            d.querySelector('.pcard .btn-edit').click();
+            await sleep(120);
+            const provSel = pqa('select')[0];
+            const vendorInput = () => pqa('.field input').find(i => i.getAttribute('list') === 'vendorOptions');
+
+            // 默认 DeepSeek：地址能反查回自己 → provider 留空（不写冗余字段）
+            const deepOpt = [...provSel.options].find(o => o.textContent.includes('DeepSeek'));
+            provSel.value = deepOpt.value;
+            provSel.dispatchEvent(new w.Event('change', { bubbles: true }));
+            await sleep(80);
+            check('DeepSeek 模板：provider 留空（走自动识别）',
+                vendorInput().value === '', JSON.stringify(vendorInput().value));
+
+            // 百炼原生：与阿里百炼共用 host，反查不回自己 → **必须**写 dashscope
+            const dsOpt = [...provSel.options].find(o => o.textContent.includes('百炼原生'));
+            check('供应商下拉含「百炼原生」', !!dsOpt);
+            provSel.value = dsOpt.value;
+            provSel.dispatchEvent(new w.Event('change', { bubbles: true }));
+            await sleep(80);
+            check('百炼原生模板：provider 自动填 dashscope',
+                vendorInput().value === 'dashscope', JSON.stringify(vendorInput().value));
+            check('  生效提示写「手工指定」',
+                /dashscope（手工指定）/.test(pq('.detected-vendor').textContent),
+                pq('.detected-vendor').textContent);
+            check('  URL 是官方根地址', q('#urlIn').value === 'https://dashscope.aliyuncs.com',
+                q('#urlIn').value);
+
+            // 改成专属域名后：provider 必须保留，状态提示要跟着更新
+            const urlIn = q('#urlIn');
+            urlIn.value = 'https://llm-w67ttc0b3gqiltm8.cn-beijing.maas.aliyuncs.com';
+            urlIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(80);
+            check('改专属域名后 provider 仍保留', vendorInput().value === 'dashscope',
+                JSON.stringify(vendorInput().value));
+            check('  状态提示不再停留在旧结论（曾显示 alibaba）',
+                !/alibaba/.test(pq('.detected-vendor').textContent),
+                pq('.detected-vendor').textContent);
+            check('  状态提示仍是 dashscope（手工指定）',
+                /dashscope（手工指定）/.test(pq('.detected-vendor').textContent),
+                pq('.detected-vendor').textContent);
+
+            // 切回阿里百炼：provider 应清空（它的地址能反查回自己）
+            const aliOpt = [...provSel.options].find(o => o.textContent.includes('阿里百炼'));
+            provSel.value = aliOpt.value;
+            provSel.dispatchEvent(new w.Event('change', { bubbles: true }));
+            await sleep(80);
+            check('切回阿里百炼后 provider 清空', vendorInput().value === '',
+                JSON.stringify(vendorInput().value));
+
+            d.getElementById('panelCancel').click();
+            await sleep(80);
+        }
+        // ---------- 连接级「连接设置覆盖」（折叠） ----------
+        {
+            d.querySelector('.pcard .btn-edit').click();
+            await sleep(120);
+            // 按 summary 文本定位（面板里还有逐模型的子编辑区，不能用 .json-editor 泛指）
+            const bySummary = (t) => pqa('.json-editor').find(e =>
+                ((e.querySelector('summary') || {}).textContent || '').startsWith(t));
+            const ed = bySummary('连接设置覆盖');
+            check('存在「连接设置覆盖」折叠区（与请求体无关，故不叫请求覆盖）', !!ed);
+            check('  默认折叠', ed && !ed.open);
+            check('  无覆盖时不显示「（已设置）」',
+                ed && !/已设置/.test(ed.querySelector('summary').textContent));
+
+            ed.open = true;
+            await sleep(50);
+            const ta = ed.querySelector('textarea');
+            check('  有 textarea', !!ta);
+
+            // 非法 JSON → 报错且不写进配置
+            ta.value = '{"list_url": ';
+            ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(50);
+            check('  非法 JSON 就地报错', !ed.querySelector('.json-err').hidden,
+                ed.querySelector('.json-err').textContent);
+            check('  非法 JSON 不写进配置', !/"request":\{/.test(preview()), preview().slice(0, 300));
+
+            // 合法 → 写进 providers[].request
+            ta.value = '{"list_url":"https://example.com/v1/models","timeout":30}';
+            ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(60);
+            check('  合法 JSON 错误消失', ed.querySelector('.json-err').hidden);
+            const cfg = JSON.parse(preview());
+            check('  写进 providers[0].request',
+                cfg.providers[0].request && cfg.providers[0].request.list_url === 'https://example.com/v1/models',
+                JSON.stringify(cfg.providers[0].request));
+            check('  timeout 也在', cfg.providers[0].request.timeout === 30);
+            check('  配置仍合法（copyBtn 未禁用）', d.getElementById('copyBtn').disabled === false,
+                d.getElementById('validationBox').textContent);
+
+            // 保存后面板重建，标签应显示「（已设置）」
+            d.getElementById('panelSave').click();
+            await sleep(120);
+            d.querySelector('.pcard .btn-edit').click();
+            await sleep(120);
+            const ed2 = pqa('.json-editor').find(e =>
+                ((e.querySelector('summary') || {}).textContent || '').startsWith('连接设置覆盖（已设置）'));
+            check('  保存后标签显示「（已设置）」', !!ed2,
+                pqa('.json-editor').map(e => (e.querySelector('summary') || {}).textContent).join(' | '));
+            check('  保存后自动展开', ed2 && ed2.open);
+
+            // 清空 = 撤销覆盖
+            const ta2 = ed2.querySelector('textarea');
+            ta2.value = '';
+            ta2.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(60);
+            const cfg2 = JSON.parse(preview());
+            check('  清空后配置里没有 request', !('request' in cfg2.providers[0]),
+                JSON.stringify(cfg2.providers[0].request));
+
+            d.getElementById('panelCancel').click();
+            await sleep(80);
+        }
+        // ---------- 导入 ----------
+        {
+            const impBtn = d.getElementById('importBtn');
+            check('存在「导入…」按钮', !!impBtn);
+            check('导入面板初始隐藏', d.getElementById('importPanel').hidden);
+
+            impBtn.click();
+            await sleep(60);
+            check('点导入后面板显示', !d.getElementById('importPanel').hidden);
+            check('导入遮罩也显示', !d.getElementById('importBackdrop').hidden);
+            check('导入面板已居中（不是贴边抽屉）',
+                w.getComputedStyle(d.getElementById('importPanel')).transform !== 'none',
+                w.getComputedStyle(d.getElementById('importPanel')).transform);
+
+            const before = preview();
+
+            // 1) 非法 JSON → 报错且**不改动**现有配置
+            const ta = d.getElementById('importText');
+            ta.value = '{"version":5,';
+            d.getElementById('importConfirm').click();
+            await sleep(60);
+            check('非法 JSON 报错', !d.getElementById('importMsg').hidden,
+                d.getElementById('importMsg').textContent);
+            check('非法导入后面板仍开着（没关）', !d.getElementById('importPanel').hidden);
+            check('非法导入不改动现有配置', preview() === before, preview().slice(0, 200));
+
+            // 2) 校验失败（api 非法）→ 同样不改动
+            ta.value = JSON.stringify({
+                version: 5,
+                providers: [{ api: 'grpc', baseURL: 'https://a.com/v1', apiKey: 'k' }],
+            });
+            d.getElementById('importConfirm').click();
+            await sleep(60);
+            check('校验失败报错并带路径', /\$\.providers\[0\]\.api/.test(d.getElementById('importMsg').textContent),
+                d.getElementById('importMsg').textContent);
+            check('校验失败不改动现有配置', preview() === before);
+
+            // 3) 合法配置 → 导入成功、面板关闭、状态被替换
+            ta.value = JSON.stringify({
+                version: 5,
+                providers: [{
+                    api: 'anthropic-messages', baseURL: 'https://api.anthropic.com/v1', apiKey: 'sk-imported',
+                    displayName: '导入来的', provider: 'anthropic',
+                    models: [
+                        { id: 'sonnet', name: 'claude-sonnet-4-5', kind: 'vision' },
+                        { id: 'flux', name: 'flux-1', kind: 'gen', request: { body: { prompt: '{prompt}' } }, bodyMode: 'replace' },
+                    ],
+                }],
+                purposes: { 'image-understanding': 'sonnet', 'image-generation': 'flux' },
+                groups: [{ purposes: ['image-understanding'], body: { max_tokens: 111 } }],
+            });
+            d.getElementById('importConfirm').click();
+            await sleep(120);
+            check('合法导入后关闭面板', d.getElementById('importPanel').hidden);
+            check('导入后清空 textarea', d.getElementById('importText').value === '');
+
+            const cfg = JSON.parse(preview());
+            check('导入替换了连接', cfg.providers.length === 1, String(cfg.providers.length));
+            check('导入保留 baseURL', cfg.providers[0].baseURL === 'https://api.anthropic.com/v1');
+            check('导入保留 apiKey', cfg.providers[0].apiKey === 'sk-imported');
+            check('导入保留 displayName', cfg.providers[0].displayName === '导入来的');
+            check('导入保留 provider 覆盖', cfg.providers[0].provider === 'anthropic');
+            check('导入保留 models 与 kind',
+                cfg.providers[0].models.length === 2 && cfg.providers[0].models[1].kind === 'gen',
+                JSON.stringify(cfg.providers[0].models));
+            check('导入保留逐模型 request/bodyMode',
+                cfg.providers[0].models[1].bodyMode === 'replace'
+                && cfg.providers[0].models[1].request.body.prompt === '{prompt}',
+                JSON.stringify(cfg.providers[0].models[1]));
+            // 导入的是**单字符串**写法（手写配置常见）→ 归一为单元素数组。
+            // 这个归一是有意的：UI 状态统一用数组，插件侧也只处理一种形状。
+            check('导入保留 purposes（单字符串归一为数组）',
+                Array.isArray(cfg.purposes['image-understanding'])
+                && cfg.purposes['image-understanding'][0] === 'sonnet'
+                && Array.isArray(cfg.purposes['image-generation'])
+                && cfg.purposes['image-generation'][0] === 'flux',
+                JSON.stringify(cfg.purposes));
+            check('导入还原用途组 body',
+                (cfg.groups || []).some(g => g.purposes.includes('image-understanding')
+                    && g.body.max_tokens === 111),
+                JSON.stringify(cfg.groups));
+
+            check('连接卡片按导入结果重建', qa('.pcard').length === 2,
+                qa('.pcard').length + '（1 连接 + 1 添加卡）');
+            check('导入后用途卡片含导入的模型（且已绑定）',
+                qa('.purpose-chip').some(c => /sonnet/.test(c.querySelector('.pc-name').textContent)),
+                JSON.stringify(qa('.pc-name').map(e => e.textContent)));
+
+            // 4) 取消不改动
+            const afterImport = preview();
+            d.getElementById('importBtn').click();
+            await sleep(50);
+            d.getElementById('importCancel').click();
+            await sleep(50);
+            check('取消后配置不变', preview() === afterImport);
+
+            // 5) 点遮罩关闭
+            d.getElementById('importBtn').click();
+            await sleep(50);
+            d.getElementById('importBackdrop').click();
+            await sleep(50);
+            check('点遮罩关闭导入面板', d.getElementById('importPanel').hidden);
+
+            // 6) 非标准分组：导入成功但有警告
+            d.getElementById('importBtn').click();
+            await sleep(50);
+            d.getElementById('importText').value = JSON.stringify({
+                version: 5,
+                providers: [{
+                    api: 'openai-completions', baseURL: 'https://api.deepseek.com/v1', apiKey: 'k',
+                    models: [{ id: 'm', name: 'deepseek-chat' }],
+                }],
+                purposes: { chat: 'm' },
+                groups: [{ purposes: ['chat'], body: { max_tokens: 7 } }],
+            });
+            d.getElementById('importConfirm').click();
+            await sleep(120);
+            check('非标准分组也导入成功', d.getElementById('importPanel').hidden);
+            check('非标准分组给出警告', !d.getElementById('validationBox').hidden
+                && /原样保留/.test(d.getElementById('validationBox').textContent),
+                d.getElementById('validationBox').textContent);
+            const cfg2 = JSON.parse(preview());
+            check('非标准分组原样保留在导出里',
+                JSON.stringify(cfg2.groups) === '[{"purposes":["chat"],"body":{"max_tokens":7}}]',
+                JSON.stringify(cfg2.groups));
+        }
+
+            // 7) 含 null 的数值字段：导入必须原样保留（不擅自改用户数据），
+            //    但插件侧不能把 null 当 0 用 —— 那条已由插件的 numOrDefault 兜住（见单测）。
+            //    这里只钉住"生成器不改写用户数据"这一半。
+            d.getElementById('importBtn').click();
+            await sleep(60);
+            d.getElementById('importText').value = JSON.stringify({
+                version: 5,
+                providers: [{
+                    api: 'openai-completions', baseURL: 'https://x.example/v1', apiKey: 'k',
+                    models: [{
+                        id: 'm', name: 'qwen-image-3.0-pro', kind: 'gen',
+                        request: {
+                            body: { model: '{model}' },
+                            response: { task_id_path: 'out.id', poll_url: 'https://x.example/t/{task_id}', poll_interval: null },
+                        },
+                    }],
+                }],
+                purposes: { 'image-generation': 'm' },
+            });
+            d.getElementById('importConfirm').click();
+            await sleep(150);
+            check('含 null 数值的配置能导入', d.getElementById('importPanel').hidden);
+            const cfgN = JSON.parse(preview());
+            const respN = cfgN.providers[0].models[0].request.response;
+            check('导入不擅自改写用户的 null',
+                'poll_interval' in respN && respN.poll_interval === null, JSON.stringify(respN));
+
+            // 打开面板看该字段的呈现：null 应显示为空，而不是字符串 "null"
+            d.querySelector('.pcard .btn-edit').click();
+            await sleep(150);
+            const edN = [...d.querySelectorAll('#panelBody .selected-list > .json-editor')].pop();
+            edN.open = true;
+            await sleep(80);
+            const respEdN = [...edN.querySelectorAll('.json-editor')].find((e) => {
+                const s = e.querySelector(':scope > summary'); return s && s.textContent.startsWith('响应格式');
+            });
+            const piN = [...respEdN.querySelectorAll('.sub-field')].find((fl) => {
+                const l = fl.querySelector('.sub-label'); return l && /轮询间隔/.test(l.textContent);
+            }).querySelector('input');
+            check('null 在数字框里显示为空（不是 "null" 字样）', piN.value === '', JSON.stringify(piN.value));
+            piN.value = '9';
+            piN.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(60);
+            check('改成合法值后 null 被替换成数字', /"poll_interval":9\b/.test(preview()),
+                preview().slice(0, 420));
+            d.getElementById('panelCancel').click();
+            await sleep(80);
+        // ---------- 顺序调整（providers[] 顺序即插件连接顺序，是真实语义） ----------
+        {
+            // 先建第二条连接，才能测顺序
+            q('.pcard-add').click();
+            const k2 = pq('.key-row input');
+            k2.value = 'sk-second';
+            k2.dispatchEvent(new w.Event('input', { bubbles: true }));
+            d.getElementById('panelSave').click();
+
+            const before = parsePreview().providers.map((p, i) => i);
+            const firstHostBefore = /\/\/([^/]+)/.exec(parsePreview().providers[0].baseURL)[1];
+            const secondHostBefore = /\/\/([^/]+)/.exec(parsePreview().providers[1].baseURL)[1];
+            check('调序前有 2 条连接', before.length === 2, before.length);
+
+            // 第一张卡片的 ↓ 按钮
+            const downBtn = qa('.pcard .btn-move')[1];
+            check('首卡 ↓ 可用', downBtn && !downBtn.disabled);
+            downBtn.click();
+
+            const after = parsePreview().providers;
+            const firstHostAfter = /\/\/([^/]+)/.exec(after[0].baseURL)[1];
+            const secondHostAfter = /\/\/([^/]+)/.exec(after[1].baseURL)[1];
+            check('下移后两条连接位置互换',
+                firstHostAfter === secondHostBefore && secondHostAfter === firstHostBefore,
+                `${firstHostBefore},${secondHostBefore} -> ${firstHostAfter},${secondHostAfter}`);
+
+            // 末位卡片的 ↑ 把它挪回去
+            const lastIdx = qa('.pcard').length - 2;   // 末位是「+ 添加」卡
+            const upBtn = [...qa('.pcard .btn-move')][lastIdx * 2];
+            check('末卡 ↑ 可用', upBtn && !upBtn.disabled);
+            upBtn.click();
+            const restored = parsePreview().providers;
+            check('上移后恢复原顺序',
+                /\/\/([^/]+)/.exec(restored[0].baseURL)[1] === firstHostBefore,
+                /\/\/([^/]+)/.exec(restored[0].baseURL)[1]);
+
+            check('首卡 ↑ 被禁用', qa('.pcard .btn-move')[0].disabled);
+            check('末卡 ↓ 被禁用', [...qa('.pcard .btn-move')].slice(-2)[1].disabled);
+        }
+
+        // ---------- API Key 会保存在本机浏览器里（刷新不丢） ----------
+        //
+        // 这是**行为契约**。此前是"永不落盘"（每次刷新都要重贴）—— 已确认不采用：
+        // 本机静态页面，而 Key 本来就已经明文存在海豹配置里，同一个信任边界，
+        // 再存一份到 localStorage 的增量风险很小，不值得用"反复粘贴"去换。
+        // 若将来要改回不落盘，这条会立刻失败，提醒你同步改提示文案。
+        check('界面上没有「记住 Key」开关（一律保存，不做开关）', !d.getElementById('rememberKey'));
+        q('.pcard .btn-edit').click();
+        const kIn = pq('.key-row input');
+        kIn.value = 'sk-PERSIST-ME';
+        kIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+        // 提示文案要在面板**开着**时查（panelSave 会把面板关掉）
+        check('提示写清"会保存在本机浏览器里"',
+            /会保存在本机浏览器里/.test(pqa('.field-note').map((e) => e.textContent).join(' ')),
+            pqa('.field-note').map((e) => e.textContent).join(' | ').slice(0, 200));
+        check('  并提示公用电脑用「清空」擦掉',
+            /公用电脑/.test(pqa('.field-note').map((e) => e.textContent).join(' ')),
+            pqa('.field-note').map((e) => e.textContent).join(' | ').slice(0, 200));
+
+        // Key 输入框只调 renderOutput()，落盘要靠 savePanel 触发 scheduleSave
+        d.getElementById('panelSave').click();
+        const dump = () => {
+            const o = {};
+            for (let i = 0; i < w.localStorage.length; i++) {
+                const k = w.localStorage.key(i);
+                o[k] = w.localStorage.getItem(k);
+            }
+            return JSON.stringify(o);
+        };
+        // 草稿是 300ms 防抖，等一会儿再看
+        const t0 = Date.now();
+        const wait = () => {
+            if (Date.now() - t0 > 1500) {
+                const ls = dump();
+                check('localStorage 里保存了 API Key（刷新不丢）',
+                    ls.includes('sk-PERSIST-ME'), ls.slice(0, 220));
+                check('localStorage 里确实存了草稿', ls.includes('providers'), ls.slice(0, 220));
+                check('预览里也有该 key（不只是草稿里有）',
+                    /sk-PERSIST-ME/.test(preview()), preview().slice(0, 160));
+                finish();
+                return;
+            }
+            setTimeout(wait, 100);
+        };
+        setTimeout(wait, 100);
+
     } catch (e) {
-        log.push('FAIL  脚本异常 :: ' + (e && e.message));
+        log.push('FAIL  脚本异常 :: ' + (e && e.message) + ' @ ' + (e && e.stack || '').split('\n')[1]);
+        finish();
     }
 
-    const ol = document.getElementById('results');
-    ol.innerHTML = '';
-    for (const l of log) {
-        const li = document.createElement('li');
-        li.textContent = l;
-        li.style.color = l.startsWith('PASS') ? 'green' : 'red';
-        li.style.fontFamily = 'monospace';
-        ol.appendChild(li);
+    function finish() {
+        const ol = document.getElementById('results');
+        ol.innerHTML = '';
+        for (const l of log) {
+            const li = document.createElement('li');
+            li.textContent = l;
+            li.style.color = l.startsWith('PASS') ? 'green' : 'red';
+            li.style.fontFamily = 'monospace';
+            ol.appendChild(li);
+        }
+        const fails = log.filter(l => l.startsWith('FAIL')).length;
+        const s = document.createElement('div');
+        s.id = 'summary';
+        s.textContent = `RESULT ${log.length - fails} passed / ${fails} failed`;
+        document.body.appendChild(s);
     }
-    const fails = log.filter(l => l.startsWith('FAIL')).length;
-    const summary = document.createElement('div');
-    summary.id = 'summary';
-    summary.textContent = `RESULT ${log.length - fails} passed / ${fails} failed`;
-    document.body.appendChild(summary);
 };
 </script>
 </body>

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>CORS 实测</title></head>
+<body>
+<h1>CORS 实测结果</h1>
+<pre id="out">running...</pre>
+<script>
+// 测试必须从**干净状态**开始：生成器会把草稿存 localStorage，
+// 上一次运行（或手动操作过页面）的存档会让断言基于错误的前提。
+try { localStorage.clear(); } catch (e) { /* 隐私模式等忽略 */ }
+
+// 目的：判断各供应商的 /models 端点是否允许浏览器直连（CORS）。
+// 方法：不带有效 key 也能测——CORS 头由服务器返回，与鉴权结果无关。
+//   - fetch(mode:'cors') 解析成功（哪怕是 401/403）→ CORS 放行
+//   - fetch(mode:'cors') 抛 TypeError → 可能被 CORS 拦，也可能是网络不通
+//   - 再用 fetch(mode:'no-cors') 区分：no-cors 成功 = 网络可达，故上一步是 CORS 拦截
+const TARGETS = [
+  { name: 'OpenRouter',   url: 'https://openrouter.ai/api/v1/models' },
+  { name: 'OpenAI',       url: 'https://api.openai.com/v1/models' },
+  { name: 'DeepSeek',     url: 'https://api.deepseek.com/v1/models' },
+  { name: '智谱 GLM',      url: 'https://open.bigmodel.cn/api/paas/v4/models' },
+  { name: '阿里百炼',      url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/models' },
+  { name: '硅基流动',      url: 'https://api.siliconflow.cn/v1/models' },
+  { name: 'Moonshot',     url: 'https://api.moonshot.cn/v1/models' },
+  { name: 'xAI',          url: 'https://api.x.ai/v1/models' },
+  { name: 'Mistral',      url: 'https://api.mistral.ai/v1/models' },
+  { name: 'Anthropic',    url: 'https://api.anthropic.com/v1/models', headers: { 'anthropic-dangerous-direct-browser-access': 'true', 'anthropic-version': '2023-06-01' } },
+];
+
+async function probe(t) {
+  const headers = Object.assign({ Authorization: 'Bearer sk-cors-probe-invalid' }, t.headers || {});
+  // 第一步：CORS 模式
+  try {
+    const r = await fetch(t.url, { method: 'GET', mode: 'cors', headers });
+    return { verdict: 'ALLOW', detail: 'HTTP ' + r.status };
+  } catch (e) {
+    // 第二步：no-cors 区分「CORS 拦截」与「网络不通」
+    try {
+      await fetch(t.url, { method: 'GET', mode: 'no-cors' });
+      return { verdict: 'BLOCK', detail: 'CORS 拦截（网络可达）' };
+    } catch (e2) {
+      return { verdict: 'UNREACH', detail: '网络不可达' };
+    }
+  }
+}
+
+(async () => {
+  const lines = [];
+  const results = [];
+  for (const t of TARGETS) {
+    const r = await probe(t);
+    results.push({ name: t.name, ...r });
+    lines.push(`${r.verdict.padEnd(8)} ${t.name.padEnd(14)} ${r.detail}`);
+    document.getElementById('out').textContent = lines.join('\n');
+  }
+  const summary = {
+    allow: results.filter(r => r.verdict === 'ALLOW').length,
+    block: results.filter(r => r.verdict === 'BLOCK').length,
+    unreach: results.filter(r => r.verdict === 'UNREACH').length,
+    results,
+  };
+  const el = document.createElement('div');
+  el.id = 'summary';
+  el.textContent = 'SUMMARY ' + JSON.stringify(summary);
+  document.body.appendChild(el);
+})();
+</script>
+</body>
+</html>

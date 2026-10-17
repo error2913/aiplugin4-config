@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>关闭路径定点验证</title></head>
+<body>
+<pre id="out">running…</pre>
+<iframe id="frame" src="/index.html" width="1500" height="950"></iframe>
+<script>
+// 测试必须从**干净状态**开始：生成器会把草稿存 localStorage，
+// 上一次运行（或手动操作过页面）的存档会让断言基于错误的前提。
+try { localStorage.clear(); } catch (e) { /* 隐私模式等忽略 */ }
+
+// 定点验证用户报告的问题：面板关掉后**计算样式**是否真的 display:none。
+// 这是原 bug 的要害：hidden 属性为 true，但 .panel{display:flex} 压过 UA 的 [hidden]{display:none}。
+const lines = [];
+const log = (s) => { lines.push(s); document.getElementById('out').textContent = lines.join('\n'); };
+
+document.getElementById('frame').onload = () => {
+    const f = document.getElementById('frame');
+    const w = f.contentWindow, d = f.contentDocument;
+    const panel = () => d.getElementById('panel');
+    const disp = () => w.getComputedStyle(panel()).display;
+    const attr = () => panel().hasAttribute('hidden');
+
+    log('初始            : attr=' + attr() + '  computed display=' + disp());
+
+    d.querySelector('.pcard-add').click();
+    log('点「+ 添加」后  : attr=' + attr() + '  computed display=' + disp());
+
+    d.getElementById('panelClose').click();
+    log('点 × 后          : attr=' + attr() + '  computed display=' + disp());
+
+    const ok = disp() === 'none' && attr();
+    log('');
+    log(ok ? 'RESULT PASS —— 关闭后计算样式为 none（真隐藏）'
+           : 'RESULT FAIL —— 关闭后仍参与渲染，display=' + disp());
+
+    const s = document.createElement('div');
+    s.id = 'summary';
+    s.textContent = 'SUMMARY ' + (ok ? 'PASS' : 'FAIL') + ' display=' + disp();
+    document.body.appendChild(s);
+};
+</script>
+</body>
+</html>

@@ -3,6 +3,7 @@ node_modules/
 dist/
 
 # 开发期临时文件
+test-reports/
 .dev/
 *.log
 

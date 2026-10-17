@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>样式检查</title></head>
+<body>
+<pre id="out">running…</pre>
+<iframe id="frame" src="/index.html" width="1500" height="950"></iframe>
+<script>
+// 测试必须从**干净状态**开始：生成器会把草稿存 localStorage，
+// 上一次运行（或手动操作过页面）的存档会让断言基于错误的前提。
+try { localStorage.clear(); } catch (e) { /* 隐私模式等忽略 */ }
+
+// 用**计算样式**核对排版/动画，而不是读 CSS 源码 —— 后者不能证明浏览器真的应用了。
+//
+// 两个必须注意的测量陷阱（都踩过）：
+//   1. getComputedStyle 查伪元素必须传第二个参数，否则拿到的是元素本身的值。
+//   2. headless 的 --virtual-time-budget **不推进 CSS 过渡**：带 transition 的属性会一直
+//      停在起始值，看起来像"没生效"。所以测量前先把过渡/动画全禁掉。
+//      注意选择器要写 `*, *::before, *::after` —— 单独的 `*` 不匹配伪元素。
+const lines = [];
+const frame = document.getElementById('frame');
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const results = [];
+const check = (name, cond, extra) => {
+  results.push({ name, cond: !!cond });
+  lines.push((cond ? '  PASS  ' : '  FAIL  ') + name
+    + (cond || extra == null ? '' : '  :: ' + extra));
+};
+
+frame.onload = async () => {
+  try {
+    const w = frame.contentWindow, d = frame.contentDocument;
+    const q = (s) => d.querySelector(s);
+    const cs = (el, pseudo) => el ? (pseudo ? w.getComputedStyle(el, pseudo) : w.getComputedStyle(el)) : null;
+    const px = (v) => parseFloat(v) || 0;
+    const hasRule = (re) => [...d.styleSheets].some((sh) => {
+      try { return [...sh.cssRules].some((r) => re.test(r.cssText)); } catch { return false; }
+    });
+
+    // 先禁掉动效，保证测到的是**最终值**
+    const kill = d.createElement('style');
+    kill.textContent = '*, *::before, *::after { transition: none !important; animation: none !important; }';
+    d.head.appendChild(kill);
+    await sleep(60);
+
+    lines.push('=== 字号（rem 基准 + 下限）===');
+    const rootFs = px(cs(d.documentElement).fontSize);
+    check('根字号未被写死（rem 才能跟随用户浏览器设置）', rootFs === 16, rootFs + 'px');
+    check('正文 15px', px(cs(d.body).fontSize) === 15, cs(d.body).fontSize);
+    check('正文行高 >= 1.6（中文需要更松的行距）',
+      px(cs(d.body).lineHeight) / px(cs(d.body).fontSize) >= 1.6, cs(d.body).lineHeight);
+
+    const samples = [
+      '.brand h1', '.brand-sub', '.pane-head h2', '.pane-hint', '.field-note',
+      '.cors-badge', '.pcard-id', '.pcard-meta', '.pcard-title', '.off-tag',
+      '.actions .btn', '.preview', '.json-area', '.version-badge', '.usage',
+      '.validation', '.purpose-label', '.field-label', '.toggle', '.fetch-msg',
+    ];
+    let min = Infinity, minSel = '';
+    for (const sel of samples) {
+      const el = q(sel);
+      if (!el) { lines.push('  -----  ' + sel + ' (未渲染，跳过)'); continue; }
+      const size = px(cs(el).fontSize);
+      if (size < min) { min = size; minSel = sel; }
+      lines.push('  ' + String(size).padStart(5) + 'px  ' + sel);
+    }
+    check('最小字号 >= 12px（此前最小 10px）', min >= 12, min + 'px @ ' + minSel);
+
+    lines.push('');
+    lines.push('=== 跨平台控件归一化 ===');
+    // 用途区改成卡片列表后，页面上**没有常驻的 select 了** —— 必须先打开编辑面板，
+    // 那里才有协议/类型等下拉。否则 q('select') 为 null，下面两条会假失败。
+    q('.pcard .btn-edit').click();
+    await sleep(150);
+    const sel0 = q('#panelBody select') || q('select');
+    check('select 去掉原生外观（各平台原生外观差异极大）',
+      !!sel0 && (cs(sel0).appearance === 'none' || cs(sel0).webkitAppearance === 'none'),
+      sel0 ? cs(sel0).appearance : '无 select');
+    check('select 自绘箭头（inline SVG，不引外部资源）',
+      !!sel0 && /^url\("data:image\/svg/.test(cs(sel0).backgroundImage),
+      sel0 ? cs(sel0).backgroundImage.slice(0, 34) : '');
+    check('color-scheme: dark（原生下拉/滚动条跟着变暗）',
+      cs(d.documentElement).colorScheme === 'dark', cs(d.documentElement).colorScheme);
+    check('字体栈含中文回退',
+      /PingFang SC|Microsoft YaHei|Noto Sans SC/.test(cs(d.body).fontFamily));
+    check('等宽字体栈（代码/预览）',
+      /mono/i.test(cs(q('.preview')).fontFamily), cs(q('.preview')).fontFamily.slice(0, 40));
+    check('滚动条已主题化（Firefox 走 scrollbar-color，WebKit 走 ::-webkit-scrollbar）',
+      /#3a4250/.test(cs(d.documentElement).scrollbarColor || '') || hasRule(/::-webkit-scrollbar/),
+      cs(d.documentElement).scrollbarColor);
+
+    lines.push('');
+    lines.push('=== 折叠箭头：CSS 画的 chevron（不再用 ▸/▾ 字符）===');
+    q('.pcard .btn-edit').click();
+    await sleep(120);
+    const ed = q('.json-editor');
+    const sum = ed && ed.querySelector('summary');
+    check('存在折叠区', !!ed);
+    if (ed) {
+      const b0 = cs(sum, '::before');
+      check('  折叠时是朝右的三角', b0.borderLeftWidth === '5px' && b0.borderLeftStyle === 'solid',
+        b0.borderLeftWidth + ' ' + b0.borderLeftStyle);
+      check('  内容为空串（不是字符）', b0.content === '""', JSON.stringify(b0.content));
+      check('  折叠时未旋转',
+        b0.transform === 'none' || b0.transform === 'matrix(1, 0, 0, 1, 0, 0)', b0.transform);
+      ed.open = true;
+      await sleep(60);
+      const b1 = cs(sum, '::before');
+      check('  展开后旋转 90°（matrix(0,1,-1,0,0,0)）',
+        b1.transform === 'matrix(0, 1, -1, 0, 0, 0)', b1.transform);
+    }
+
+    lines.push('');
+    lines.push('=== 品牌标记（原 emoji，现纯 CSS 绘制）===');
+    const bm = q('.brand-mark');
+    check('无文本内容（不再是 emoji）', !!bm && bm.textContent === '', JSON.stringify(bm && bm.textContent));
+    check('有尺寸', !!bm && px(cs(bm).width) > 0, bm ? cs(bm).width : '');
+    check('用渐变背景而非字形', !!bm && /gradient/.test(cs(bm).backgroundImage));
+    check('::after 画内芯', !!bm && cs(bm, '::after').content === '""');
+
+    lines.push('');
+    lines.push('=== 动效（先撤掉禁动效样式再读）===');
+    kill.remove();
+    await sleep(80);
+    const panel = d.getElementById('panel');
+    check('编辑面板有滑入动画', /slide-in-right/.test(cs(panel).animationName), cs(panel).animationName);
+    check('遮罩有淡入动画', /fade-in/.test(cs(d.getElementById('panelBackdrop')).animationName));
+    check('卡片 hover 有过渡', /transform/.test(cs(q('.pcard')).transitionProperty),
+      cs(q('.pcard')).transitionProperty);
+    check('按钮有过渡', /background|transform/.test(cs(q('.btn')).transitionProperty));
+    check('折叠箭头有 transform 过渡', /transform/.test(cs(sum, '::before').transitionProperty));
+    check('定义了 prefers-reduced-motion 降级', hasRule(/prefers-reduced-motion/));
+
+    lines.push('');
+    lines.push('=== 无 emoji ===');
+    const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{FF0B}]/u;
+    const txt = d.body.innerText || '';
+    check('可见文本不含 emoji / 全角＋', !EMOJI.test(txt), (txt.match(EMOJI) || []).join(' '));
+    check('CSS 内容里不含 ▸/▾ 字符', !hasRule(/[▸▾]/));
+
+    const failed = results.filter((r) => !r.cond);
+    lines.push('');
+    lines.push('SUMMARY ' + results.length + ' 项，失败 ' + failed.length);
+
+    document.getElementById('out').textContent = lines.join('\n');
+    const s = document.createElement('div');
+    s.id = 'summary';
+    s.textContent = 'RESULT ' + (results.length - failed.length) + ' passed / ' + failed.length + ' failed';
+    document.body.appendChild(s);
+  } catch (e) {
+    document.getElementById('out').textContent = lines.join('\n') + '\n\nERROR: ' + (e && e.stack || e);
+    const s2 = document.createElement('div'); s2.id = 'summary';
+    s2.textContent = 'SUMMARY ERROR ' + (e && e.message || e);
+    document.body.appendChild(s2);
+  }
+};
+</script>
+</body>
+</html>

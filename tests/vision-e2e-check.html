@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>DeepSeek 视觉模型端到端检查</title></head>
+<body>
+<pre id="out">running…</pre>
+<iframe id="frame" src="/index.html" width="1500" height="950"></iframe>
+<script>
+// 测试必须从**干净状态**开始：生成器会把草稿存 localStorage，
+// 上一次运行（或手动操作过页面）的存档会让断言基于错误的前提。
+try { localStorage.clear(); } catch (e) { /* 隐私模式等忽略 */ }
+
+// 用假的 fetch 顶掉真实网络：模拟 DeepSeek GET /models 的真实返回（含 input_modalities）。
+// 目的：验证「拉取 → 卡片标注 → 点选 → 配置里 kind=vision」整条链路真的通，
+// 而不是只在单元测试里对 kindFromMetadata 打勾。
+const lines = [];
+const frame = document.getElementById('frame');
+
+frame.onload = async () => {
+    const w = frame.contentWindow, d = frame.contentDocument;
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    // 顶掉 iframe 内的 fetch（拉取前）
+    w.fetch = async (url, opts) => {
+        if (String(url).includes('/models')) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    object: 'list',
+                    data: [
+                        { id: 'deepseek-chat', input_modalities: ['text'], context_window: 128000 },
+                        { id: 'deepseek-flash', name: 'DeepSeek Flash', input_modalities: ['text', 'image'], context_window: 128000 },
+                    ],
+                }),
+            };
+        }
+        throw new Error('unexpected ' + url);
+    };
+
+    // 打开第一张卡的编辑面板
+    const editBtn = d.querySelector('.pcard .btn-edit');
+    lines.push('编辑按钮存在: ' + !!editBtn);
+    editBtn.click();
+    await sleep(120);
+
+    const panel = d.getElementById('panelBody');
+    lines.push('面板已开: ' + !!panel && !d.getElementById('panel').hidden);
+    lines.push('面板内已无 .adv 折叠区: ' + !d.querySelector('.adv'));
+
+    // 填 key，然后点「自动拉取模型列表」
+    const keyIn = d.querySelector('.key-row input');
+    keyIn.value = 'sk-fake';
+    keyIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+    await sleep(60);
+
+    const fetchBtn = [...panel.querySelectorAll('button')].find(b => /拉取/.test(b.textContent));
+    lines.push('拉取按钮可见: ' + !!fetchBtn);
+    fetchBtn.click();
+    await sleep(300);
+
+    // 看卡片标注
+    const chips = [...panel.querySelectorAll('.model-chip')];
+    lines.push('');
+    lines.push('拉到卡片数: ' + chips.length);
+    for (const c of chips) {
+        lines.push('  ' + c.querySelector('.mc-name').textContent
+            + '  →  ' + c.querySelector('.mc-kind').textContent
+            + '  [class=' + c.querySelector('.mc-kind').className + ']');
+    }
+
+    // 点选两个模型
+    for (const c of chips) c.click();
+    await sleep(200);
+
+    // 看已选列表的 kind 下拉
+    const rows = [...panel.querySelectorAll('.sel-row')];
+    lines.push('');
+    lines.push('已选行数: ' + rows.length);
+    for (const r of rows) {
+        const sel = r.querySelector('select');
+        lines.push('  ' + r.querySelector('.sel-name').textContent
+            + '  下拉当前值=' + JSON.stringify(sel.value)
+            + '  首项=' + JSON.stringify(sel.options[0].textContent));
+    }
+
+    // 保存，看生成的配置
+    d.getElementById('panelSave').click();
+    await sleep(200);
+    const cfg = JSON.parse(d.getElementById('preview').textContent);
+    lines.push('');
+    lines.push('生成的配置里每个模型的 kind:');
+    for (const m of cfg.providers[0].models) {
+        lines.push('  ' + m.name + '  kind=' + JSON.stringify(m.kind)
+            + ('kind' in m ? '' : '   ← 未写（交给插件判断）'));
+    }
+
+    const flash = cfg.providers[0].models.find(m => m.name === 'deepseek-flash');
+    const chat = cfg.providers[0].models.find(m => m.name === 'deepseek-chat');
+    lines.push('');
+    lines.push('SUMMARY flashKind=' + JSON.stringify(flash && flash.kind)
+        + ' chatHasKind=' + !!(chat && 'kind' in chat));
+
+    document.getElementById('out').textContent = lines.join('\n');
+    const s = document.createElement('div');
+    s.id = 'summary';
+    s.textContent = 'SUMMARY flashKind=' + JSON.stringify(flash && flash.kind)
+        + ' chatHasKind=' + !!(chat && 'kind' in chat);
+    document.body.appendChild(s);
+};
+</script>
+</body>
+</html>

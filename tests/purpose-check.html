@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>用途绑定卡片检查</title>
+<style>html,body{margin:0;background:#111;color:#eee;font:14px monospace}iframe{border:0;display:block;width:1400px;height:820px}</style>
+</head>
+<body>
+<pre id="out">running…</pre>
+<script>
+// 用途绑定卡片 + 取用顺序的检查。
+//
+// ⚠️ 两个必须注意的点（都踩过）：
+//   1. **先清/先种，再建 iframe**：把 <iframe src> 写在脚本前面会与 localStorage 操作竞态，
+//      测试可能"读到"操作之前的状态而假通过。
+//   2. 出厂示例只绑 4 个用途、且只有 1 个对话模型 —— 想验证"点第二张卡片"必须**先种多模型**。
+const lines = [];
+const results = [];
+const check = (name, cond, extra) => {
+    results.push({ name, cond: !!cond });
+    lines.push((cond ? 'PASS  ' : 'FAIL  ') + name + (cond || extra == null ? '' : '  :: ' + extra));
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const LS_KEY = 'aiplugin4-config-v5-draft';
+
+// 种一份草稿：3 个对话模型（跨两个连接）+ 1 个嵌入模型，用途全不绑定
+const SEED = {
+    providers: [
+        {
+            uid: 'u1', templateId: 'deepseek', mode: 'vendor', provider: '', api: 'openai-completions',
+            baseURL: 'https://api.deepseek.com/v1', apiKey: 'sk-x',
+            models: [
+                { id: 'chat-a', name: 'deepseek-chat' },
+                { id: 'chat-b', name: 'deepseek-reasoner' },
+            ],
+            enabled: true, displayName: '', timeout: 0, request: {},
+        },
+        {
+            uid: 'u2', templateId: 'moonshot', mode: 'vendor', provider: '', api: 'openai-completions',
+            baseURL: 'https://api.moonshot.cn/v1', apiKey: 'sk-y',
+            models: [{ id: 'chat-c', name: 'kimi-k2' }],
+            enabled: true, displayName: '', timeout: 0, request: {},
+        },
+    ],
+    purposes: {},
+    useBodies: {},
+    extraGroups: [],
+};
+
+(async () => {
+    try {
+        localStorage.setItem(LS_KEY, JSON.stringify(SEED));
+        const frame = document.createElement('iframe');
+        frame.src = '/index.html';
+        document.body.appendChild(frame);
+        await new Promise((res) => { frame.onload = res; });
+        await sleep(250);
+
+        const w = frame.contentWindow, d = frame.contentDocument;
+        const q = (s) => d.querySelector(s);
+        const qa = (s) => [...d.querySelectorAll(s)];
+        const preview = () => d.getElementById('preview').textContent;
+        const blockOf = (re) => qa('.purpose-block')
+            .find((b) => re.test(b.querySelector('.purpose-label').textContent));
+
+        check('每个用途一个卡片块', qa('.purpose-block').length === 8, String(qa('.purpose-block').length));
+        check('不再有下拉菜单（用途绑定已改卡片列表）', qa('.purpose-row').length === 0);
+        check('每块都有标题与顺序摘要',
+            qa('.purpose-block').every((b) => b.querySelector('.purpose-label') && b.querySelector('.purpose-order')));
+
+        // ---- 初始：一个都没绑 → 全部「（不指定）」
+        const chat = blockOf(/对话/);
+        check('对话块存在', !!chat);
+        check('初始无绑定 → 显示「（不指定）」',
+            chat.querySelector('.purpose-order').textContent.includes('不指定'),
+            chat.querySelector('.purpose-order').textContent);
+        check('对话块有 3 张可选卡片（种了 3 个对话模型）',
+            chat.querySelectorAll('.purpose-chip').length === 3,
+            String(chat.querySelectorAll('.purpose-chip').length));
+        check('嵌入模型不出现在对话候选里（类型隔离）',
+            ![...chat.querySelectorAll('.pc-name')].some((e) => /embed/i.test(e.textContent)));
+
+        // ---- 点第 1 张 → 角标 1
+        const chips = [...chat.querySelectorAll('.purpose-chip')];
+        chips[2].click();          // 故意先点**第三张**，验证"顺序 = 点击顺序"而不是列表顺序
+        await sleep(180);
+        let cb = blockOf(/对话/);
+        let picked = [...cb.querySelectorAll('.purpose-chip.picked')];
+        check('点击后 1 张已绑定', picked.length === 1, String(picked.length));
+        check('角标显示 1', picked[0].querySelector('.rank-badge').textContent === '1',
+            picked[0].querySelector('.rank-badge').textContent);
+        const nameFirst = picked[0].querySelector('.pc-name').textContent;
+        let cfg = JSON.parse(preview());
+        check('配置里 purposes.chat 是数组', Array.isArray(cfg.purposes.chat), JSON.stringify(cfg.purposes.chat));
+        check('数组里是刚点的那张（不是列表第一张）',
+            cfg.purposes.chat.length === 1 && cfg.purposes.chat[0] !== 'chat-a',
+            JSON.stringify(cfg.purposes.chat));
+
+        // ---- 再点第 1 张（列表首位）→ 它排到第 2 位
+        cb.querySelectorAll('.purpose-chip')[0].click();
+        await sleep(180);
+        cb = blockOf(/对话/);
+        picked = [...cb.querySelectorAll('.purpose-chip.picked')];
+        check('点击后 2 张已绑定', picked.length === 2, String(picked.length));
+        // 注意：picked 是 **DOM 顺序**（卡片列表顺序），不是角标顺序 —— 两者不同，
+        // 所以要比"角标集合"，不能比"按 DOM 顺序拼接的角标串"（这里踩过一次）。
+        const badges = picked.map((c) => c.querySelector('.rank-badge').textContent).sort().join(',');
+        check('角标集合是 {1,2}', badges === '1,2', badges);
+        const order = cb.querySelector('.purpose-order').textContent;
+        check('顺序摘要按 1 → 2 列出', /1\..*→.*2\./.test(order), order);
+        check('先点的排在第 1 位', order.indexOf(nameFirst) < order.indexOf('2.'), order);
+        cfg = JSON.parse(preview());
+        check('配置数组顺序 = 点击顺序', cfg.purposes.chat.length === 2
+            && cfg.purposes.chat[0] !== cfg.purposes.chat[1], JSON.stringify(cfg.purposes.chat));
+
+        // ---- 取消第 1 位 → 后面的序号前移
+        const first = cb.querySelector('.purpose-chip.picked');
+        const nameRemoved = first.querySelector('.pc-name').textContent;
+        first.click();
+        await sleep(180);
+        cb = blockOf(/对话/);
+        picked = [...cb.querySelectorAll('.purpose-chip.picked')];
+        check('取消一张后剩 1 张', picked.length === 1, String(picked.length));
+        check('剩余那张角标前移为 1', picked[0].querySelector('.rank-badge').textContent === '1',
+            picked[0].querySelector('.rank-badge').textContent);
+        check('剩下的是没被取消的那个',
+            picked[0].querySelector('.pc-name').textContent !== nameRemoved,
+            picked[0].querySelector('.pc-name').textContent);
+        cfg = JSON.parse(preview());
+        check('配置里只剩 1 项', cfg.purposes.chat.length === 1, JSON.stringify(cfg.purposes.chat));
+
+        // ---- 全部取消 → 该用途从配置里消失（不留空数组）
+        picked[0].click();
+        await sleep(180);
+        cfg = JSON.parse(preview());
+        check('全部取消后 purposes.chat 被删掉（不留空数组）',
+            !('chat' in (cfg.purposes || {})), JSON.stringify(cfg.purposes));
+
+        // ---- 措辞
+        const intro = q('.purpose-intro').textContent;
+        check('说明写清了取用顺序语义', /取用顺序|先用 1/.test(intro), intro.slice(0, 100));
+        check('说明不含误导性的「自动」', !/自动/.test(intro), intro);
+
+        // ---- 无可用模型的用途要给出原因，而不是空列表
+        const tts = blockOf(/语音/);
+        if (tts && tts.querySelectorAll('.purpose-chip').length === 0) {
+            check('无可用模型的用途给出原因', !!tts.querySelector('.purpose-why'),
+                tts.textContent.slice(0, 80));
+        }
+
+        // ---- 刷新后绑定顺序保留（数组写进了草稿）
+        cb = blockOf(/对话/);
+        cb.querySelectorAll('.purpose-chip')[1].click();
+        await sleep(500);   // 等防抖落盘
+        const stored = w.localStorage.getItem(LS_KEY) || '';
+        check('绑定顺序写进了草稿', /"purposes":\{"chat":\[/.test(stored), stored.slice(0, 140));
+
+        const failed = results.filter((r) => !r.cond);
+        lines.push('');
+        lines.push('SUMMARY ' + results.length + ' 项，失败 ' + failed.length);
+        document.getElementById('out').textContent = lines.join('\n');
+        document.body.insertAdjacentHTML('beforeend',
+            '<div id="summary">RESULT ' + (results.length - failed.length) + ' passed / ' + failed.length + ' failed</div>');
+    } catch (e) {
+        document.getElementById('out').textContent = lines.join('\n') + '\n\nERROR: ' + (e && e.stack || e);
+        document.body.insertAdjacentHTML('beforeend',
+            '<div id="summary">SUMMARY ERROR ' + (e && e.message || e) + '</div>');
+    }
+})();
+</script>
+</body>
+</html>
