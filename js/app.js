@@ -455,6 +455,28 @@ function renderPanel() {
             usesNote = `媒体用途：仅收录了 ${uses.map(label).join(' / ')}`
                 + `（未收录的用途会退回通用 OpenAI 兼容结构，多半会失败）。`;
         }
+        // ---- URL 形态与 provider 不匹配 → 拼出来的地址会 404
+        //
+        // 这是实测踩到的真坑：百炼有**两套**地址形态，而 provider 决定拼哪条路径后缀：
+        //   兼容模式  https://<host>/compatible-mode/v1        + provider=alibaba  → /images/generations
+        //   原生      https://<host>/api/v1/services/aigc/...  + provider=dashscope → 原生端点
+        // 混搭（如 compatible-mode/v1 + dashscope）会拼成
+        //   .../compatible-mode/v1/api/v1/services/aigc/multimodal-generation/generation → **404**
+        // 而且响应体是空的，插件只能报个状态码，用户完全看不出原因。
+        //
+        // 注意 MaaS 专属域名（llm-xxx.maas.aliyuncs.com）**不在**插件的域名表里，
+        // 必须手工填 provider —— 所以这个坑在专属部署上尤其容易踩。
+        let mismatchNote = '';
+        const url = (draft.baseURL || '').toLowerCase();
+        if (eff === 'dashscope' && url.includes('/compatible-mode')) {
+            mismatchNote = '⚠ 地址是**兼容模式**，但 dashscope 走的是原生端点 —— '
+                + '两者会拼出 /compatible-mode/v1/api/v1/services/… → 404。'
+                + '这里应填 alibaba（或把地址换成原生 …/api/v1/services/aigc/multimodal-generation/generation）。';
+        } else if (eff === 'alibaba' && /\/api\/v1\/services\//.test(url)) {
+            mismatchNote = '⚠ 地址是**百炼原生**端点，但 alibaba 走的是兼容模式 —— '
+                + '这里应填 dashscope。';
+        }
+
         vNote.textContent = [
             explicit
                 ? '已手工指定，覆盖自动识别。'
@@ -462,7 +484,9 @@ function renderPanel() {
                     ? '留空即可 —— 已按 API 地址自动识别。用于选择媒体请求结构（语音/生图）与余额端点。'
                     : '该地址未收录。若它代理的是某家原生接口（如百炼原生 wanx、Google Cloud TTS），请在此填写对方标识；否则留空按 OpenAI 兼容处理。'),
             usesNote,
+            mismatchNote,
         ].filter(Boolean).join(' ');
+        vNote.classList.toggle('vendor-warn', !!mismatchNote);
     }
     updateVendorStatus();
     body.appendChild(vWrap);

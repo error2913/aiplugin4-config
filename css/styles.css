@@ -438,6 +438,10 @@ textarea { resize: vertical; min-height: 60px; }
   border-radius: var(--radius-sm); padding: 8px 11px;
 }
 .detected-vendor.unknown { color: var(--text-faint); background: var(--bg-input); border-color: var(--border); }
+/* provider 与 URL 形态不匹配时的提示（如 compatible-mode + dashscope → 404）。
+   用警示色，因为这类混搭插件只会报个状态码，用户看不出原因。 */
+.vendor-warn { color: #e3b341 !important; }
+.field-note.vendor-warn { font-weight: 550; }
 
 /* ---------- 折叠区（请求覆盖 / 用途组 / 使用说明共用） ---------- */
 /* 箭头改用 CSS 画的 chevron：不再依赖 ▸/▾ 字符（各平台字体渲染宽度不一，且是装饰性符号）。
