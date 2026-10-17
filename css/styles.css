@@ -609,6 +609,25 @@ details.usage-box { margin-top: 16px; border-top: 1px solid var(--border); paddi
 .usage li { margin: 5px 0; }
 .usage strong { color: var(--text); }
 
+/* ---------- 有新版本提示（版本自检） ---------- */
+/* 固定在顶部：只在"你跑的是浏览器缓存的旧版"时出现 —— 必须显眼，但不能挡住操作 */
+.update-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 200;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 9px 16px;
+  background: linear-gradient(180deg, #3b2f10, #2e2610);
+  border-bottom: 1px solid #6b5320;
+  color: #e3b341;
+  font-size: var(--fs-sm);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .4);
+  animation: fade-slide-down var(--dur-slow) var(--ease);
+}
+.update-bar .btn { flex: 0 0 auto; }
+/* 把页面内容顶下来，避免盖住顶栏。:has 不被支持时只是不顶，不影响可用 */
+body:has(.update-bar) { padding-top: 46px; }
+
 /* ---------- toast ---------- */
 .toast {
   position: fixed; left: 50%; bottom: 28px;

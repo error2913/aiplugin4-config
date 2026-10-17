@@ -4,7 +4,24 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>aiplugin4 配置生成器 v5</title>
-<link rel="stylesheet" href="css/styles.css">
+<script>
+// 把地址栏上的 ?v= 透传到**资源 URL**，让 HTML 与 CSS/JS **一起**绕过缓存。
+//
+// 为什么需要：GitHub Pages 固定发 Cache-Control: max-age=600，且不支持自定义响应头。
+// 部署后浏览器可能仍在跑旧文件。实测过三种"看起来对但没用"的写法：
+//   location.reload()                     → 只刷到新 HTML，子资源仍走缓存
+//   location.replace(url + '?_=' + now)   → 同上
+//   await import('./js/app.js?v=…')       → **会让 JS 在 load 事件之后才跑**（就绪时刻变了）
+// 只有 Ctrl+F5 会全绕开。所以要在**解析期同步**把 ?v= 写进标签 URL —— 这正是
+// document.write 的正当用法（解析期插入，模块仍按正常时机加载并阻塞 load）。
+//
+// 正常访问（没有 ?v=）时 q 为空串，等价于原来的静态标签。
+(function () {
+  var v = new URLSearchParams(location.search).get('v');
+  var q = v ? '?v=' + encodeURIComponent(v) : '';
+  document.write('<link rel="stylesheet" href="css/styles.css' + q + '">');
+})();
+</script>
 </head>
 <body>
 
@@ -116,6 +133,15 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script type="module" src="js/app.js"></script>
+<script>
+// 同上：解析期同步注入主模块，带上 ?v= 让 JS 也绕开缓存。
+// **不要**改成 `await import(...)` —— 那会让 JS 在 load 之后才执行，
+// 页面的"就绪时刻"随之后移（本轮踩过：10 个浏览器测试因此失败）。
+(function () {
+  var v = new URLSearchParams(location.search).get('v');
+  var q = v ? '?v=' + encodeURIComponent(v) : '';
+  document.write('<script type="module" src="js/app.js' + q + '"><\/script>');
+})();
+</script>
 </body>
 </html>

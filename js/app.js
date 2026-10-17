@@ -1575,3 +1575,60 @@ if (saved) {
     state = factoryState();
 }
 renderAll();
+
+// ---------------------------------------------------------------- 版本自检
+//
+// 为什么需要：GitHub Pages 固定发 `Cache-Control: max-age=600`（HTML 与 JS 都是），
+// 而且 **Pages 不支持自定义响应头**（没有 Netlify/Cloudflare 那种 `_headers`）。
+// 于是部署后最多 10 分钟内浏览器可能仍在跑旧文件 —— 表现为"我明明改了它却没生效"，
+// 极难排查（本项目在本地服务和 Pages 上各踩过一次，都是 Ctrl+F5 才发现）。
+//
+// 根治思路：让**页面自己发现自己是旧的**。
+//   1. 取一份**绕过缓存**的自身副本（cache: 'no-store'）
+//   2. 与浏览器**当前正在运行的**那份（cache: 'only-if-cached'）比对
+//   3. 不一致 → 顶部出一条"有新版本"，点一下带 ?v= 重载
+//
+// 关键：这个检查由**旧页面**发起也能发现新版本，所以缓存挡不住它。
+//
+// 「立即刷新」为什么要带 ?v=：实测 `location.reload()` 和
+// `location.replace(url + '?_=' + now)` **都只能刷到新 HTML，子资源仍走缓存**，
+// 提示会一直在（只有 Ctrl+F5 会全绕开）。所以 index.html 里有段解析期脚本
+// 把 ?v= 透传给 CSS/JS 的 URL，让三者**一起**换成新 URL。
+//
+// 任何一步失败都**静默跳过**：这只是便利提示，不能因检查失败影响正常使用。
+async function checkForNewerVersion() {
+    try {
+        const url = import.meta.url;
+        const [running, latest] = await Promise.all([
+            // 浏览器当前手上那份（就是它刚执行的那份）
+            fetch(url, { cache: 'only-if-cached', mode: 'same-origin' }).then((r) => r.text()),
+            // 服务器上那份（绕过一切缓存）
+            fetch(`${url}?t=${Date.now()}`, { cache: 'no-store' }).then((r) => r.text()),
+        ]);
+        if (running === latest) return;
+        showUpdateBanner();
+    } catch {
+        /* only-if-cached 不被支持 / 离线 / 跨源 —— 静默跳过 */
+    }
+}
+
+function showUpdateBanner() {
+    if ($('updateBar')) return;
+    const bar = el('div', 'update-bar');
+    bar.id = 'updateBar';
+    const txt = el('span', 'update-text');
+    txt.textContent = '页面有更新（当前是浏览器缓存的旧版）';
+    bar.appendChild(txt);
+    const btn = el('button', 'btn btn-sm btn-primary');
+    btn.type = 'button';
+    btn.textContent = '立即刷新';
+    btn.onclick = () => {
+        const u = new URL(location.href);
+        u.searchParams.set('v', String(Date.now()));
+        location.replace(u.toString());
+    };
+    bar.appendChild(btn);
+    document.body.appendChild(bar);
+}
+
+checkForNewerVersion();
