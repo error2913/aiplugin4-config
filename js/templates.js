@@ -132,6 +132,7 @@ export function resolveVendorFromUrl(baseURL) {
 export const MEDIA_ENDPOINT_SUFFIXES = [
     ['/api/v1/services/aigc/multimodal-generation/generation', 'dashscope'],
     ['/api/v1/services/aigc/text2image/image-synthesis', 'dashscope'],
+    ['/api/v1/services/audio/tts/SpeechSynthesizer', 'dashscope'],
     ['/v2beta/stable-image/generate/ultra', 'stability'],
     ['/v2beta/stable-image/generate/core', 'stability'],
     ['/v1beta1/text:synthesize', 'google-cloud'],
