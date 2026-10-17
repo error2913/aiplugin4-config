@@ -2,7 +2,7 @@
 // 交互设计见 aiplugin4 仓库 docs/13-模型配置v5方案.md 第 9.2 节。
 import {
     PROVIDER_TEMPLATES, API_DIALECTS, MODEL_KINDS, PURPOSES, KNOWN_VENDORS,
-    TARGET_PLUGIN_VERSION, PLUGIN_REPO_URL, getTemplate, templateIdForBaseUrl,
+    getTemplate, templateIdForBaseUrl,
     resolveVendorFromUrl, MEDIA_VENDOR_USES, providerForTemplate,
 } from './templates.js';
 import { decideKind } from './classify.js';
@@ -1534,9 +1534,6 @@ $('importBackdrop').onclick = closeImport;
 $('importConfirm').onclick = doImport;
 
 // ---------------------------------------------------------------- 启动
-
-$('versionBadge').innerHTML =
-    `适配 aiplugin4 v${TARGET_PLUGIN_VERSION}（v5 配置） · <a href="${PLUGIN_REPO_URL}" target="_blank" rel="noopener">源码</a>`;
 
 /**
  * 出厂示例状态 —— **唯一的定义处**。

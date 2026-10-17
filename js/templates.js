@@ -8,8 +8,10 @@
 //   'unreach'    本机网络不可达（DNS 干扰/被墙），CORS 状态未知
 // 国内厂商全部放行，所以「自动拉取模型列表」可作主入口。
 
-export const TARGET_PLUGIN_VERSION = '5.0.0';
-export const PLUGIN_REPO_URL = 'https://github.com/error2913/aiplugin4';
+// 注意：这里**没有**「目标插件版本」常量。
+// 曾经有过一个 TARGET_PLUGIN_VERSION = '5.0.0' 用在顶栏徽章上 —— 那是**错的**：
+// "v5" 指的是**配置格式**，不是插件版本；插件版本是 4.2x（v5 配置随 4.25 发布）。
+// 徽章本身也已按要求删掉，常量随之删除，避免留一个会误导的版本号。
 
 /** 协议方言（对应 v5 的 providers[].api） */
 export const API_DIALECTS = [

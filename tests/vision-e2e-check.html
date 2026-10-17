@@ -67,9 +67,19 @@ frame.onload = async () => {
             + '  [class=' + c.querySelector('.mc-kind').className + ']');
     }
 
-    // 点选两个模型
-    for (const c of chips) c.click();
+    // 点选模型卡片。**只点未选中的** —— 点击是"切换"语义，
+    // 而拉取到的模型可能**已经在出厂默认里选好了**（deepseek-flash），
+    // 无脑全点会把它取消掉（本轮就踩了：出厂默认从 deepseek-v4-flash 改成
+    // deepseek-flash 后，与拉取结果同名，于是被这次点击取消了）。
+    let picked = 0;
+    for (const c of chips) {
+        if (c.classList.contains('picked')) continue;
+        c.click();
+        picked++;
+    }
     await sleep(200);
+    lines.push('');
+    lines.push('新点选 ' + picked + ' 个（已选中的保持不动）');
 
     // 看已选列表的 kind 下拉
     const rows = [...panel.querySelectorAll('.sel-row')];
@@ -95,15 +105,29 @@ frame.onload = async () => {
 
     const flash = cfg.providers[0].models.find(m => m.name === 'deepseek-flash');
     const chat = cfg.providers[0].models.find(m => m.name === 'deepseek-chat');
+
+    // 显式断言，而不是只把值打出来 —— 值打出来看着像通过，其实可能是 undefined。
+    // 这条测的是：接口自报 input_modalities 的模型，kind 应被写进配置为 vision。
+    const checks = [];
+    const check = (name, cond, extra) => {
+        checks.push({ name, cond: !!cond });
+        lines.push((cond ? 'PASS  ' : 'FAIL  ') + name + (cond || extra == null ? '' : '  :: ' + extra));
+    };
     lines.push('');
-    lines.push('SUMMARY flashKind=' + JSON.stringify(flash && flash.kind)
-        + ' chatHasKind=' + !!(chat && 'kind' in chat));
+    check('视觉模型被选中（deepseek-flash 在配置里）', !!flash,
+        JSON.stringify(cfg.providers[0].models.map(m => m.name)));
+    check('  自报能力的模型 kind 写成 vision', flash && flash.kind === 'vision',
+        flash ? String(flash.kind) : '(不在配置里)');
+    check('未自报能力的模型不写 kind（交给插件判断）', chat && !('kind' in chat),
+        chat ? JSON.stringify(chat.kind) : '(deepseek-chat 不在配置里)');
+
+    const failed = checks.filter((c) => !c.cond);
+    const summary = 'RESULT ' + (checks.length - failed.length) + ' passed / ' + failed.length + ' failed';
 
     document.getElementById('out').textContent = lines.join('\n');
     const s = document.createElement('div');
     s.id = 'summary';
-    s.textContent = 'SUMMARY flashKind=' + JSON.stringify(flash && flash.kind)
-        + ' chatHasKind=' + !!(chat && 'kind' in chat);
+    s.textContent = summary;
     document.body.appendChild(s);
 };
 </script>
