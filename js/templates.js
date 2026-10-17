@@ -21,8 +21,8 @@ export const API_DIALECTS = [
 export const PROVIDER_TEMPLATES = [
     { id: 'deepseek', label: 'DeepSeek', provider: 'deepseek', api: 'openai-completions',
       baseUrl: 'https://api.deepseek.com/v1', cors: 'allow',
-      modelHints: ['deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner'],
-      notes: '内置余额查询，可用 .ai balance 直接查。' },
+      modelHints: ['deepseek-flash', 'deepseek-pro'],
+      notes: '内置余额查询，可用 .ai balance 直接查。flash 是视觉模型（可识图），pro 是文本模型。' },
     { id: 'zhipu', label: '智谱 GLM', provider: 'zhipu', api: 'openai-completions',
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4', cors: 'allow',
       modelHints: ['glm-4-plus', 'glm-4v'],

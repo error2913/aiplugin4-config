@@ -195,8 +195,15 @@ f.onload = async () => {
 
         // ---------- kind 下拉可改 ----------
         const selRows = pqa('.sel-row');
-        check('已选列表有 2 行', selRows.length === 2, selRows.length);
-        const kindSel = selRows[1].querySelector('select');
+        // 出厂连接现在钉 2 个模型（flash/pro），再加手动这 1 个 → 3 行。
+        // 不写死数字、**按名字**定位要改的那一行 —— 按下标会在出厂默认变化时默默改错模型
+        // （本轮就踩了：出厂从 1 个模型变成 2 个，selRows[1] 从 FLUX 变成了 pro）。
+        check('已选列表行数 = 出厂模型数 + 手动加的 1',
+            selRows.length === 3, selRows.length + ' 行：'
+            + JSON.stringify(selRows.map(r => r.querySelector('.sel-name').textContent)));
+        const fluxRow = selRows.find(r => /FLUX\.1-schnell/.test(r.querySelector('.sel-name').textContent));
+        check('找到 FLUX 那一行', !!fluxRow);
+        const kindSel = fluxRow.querySelector('select');
         kindSel.value = 'vision';
         kindSel.dispatchEvent(new w.Event('change', { bubbles: true }));
         d.getElementById('panelSave').click();
@@ -210,7 +217,11 @@ f.onload = async () => {
 
             // 编辑区是 .sel-row 的**兄弟**（挂在 .selected-list 下），不是它的子元素
             const editors = pqa('.selected-list > .json-editor');
-            check('每个已选模型都有一个「请求与响应格式」编辑区', editors.length === 2, editors.length);
+            // 用"每个已选模型一个编辑区"这个**不变量**，不写死数字
+            // （出厂默认的模型数会变，写死就会在别处默默失配）
+            const rowCount = pqa('.sel-row').length;
+            check('每个已选模型都有一个「请求与响应格式」编辑区',
+                editors.length === rowCount && rowCount > 0, editors.length + ' vs ' + rowCount + ' 行');
             check('「请求与响应格式」默认折叠', editors.every(e => !e.open), JSON.stringify(editors.map(e => e.open)));
             check('折叠时标签写「请求与响应格式」',
                 editors[0].querySelector('summary').textContent === '请求与响应格式',
@@ -220,7 +231,8 @@ f.onload = async () => {
                 !pqa('.json-editor > summary').some(s => s.textContent === '请求覆盖'),
                 pqa('.json-editor > summary').map(s => s.textContent).join(' | '));
             // bodyMode 行**总是**渲染（避免提交时重建面板夺走焦点），无覆盖时禁用
-            check('bodyMode 行总是存在', pqa('.body-mode-row').length === 2, String(pqa('.body-mode-row').length));
+            check('bodyMode 行总是存在（每个模型一行）',
+                pqa('.body-mode-row').length === rowCount, String(pqa('.body-mode-row').length));
             check('无覆盖时 bodyMode 被禁用', pqa('.body-mode-row select').every(s => s.disabled),
                 JSON.stringify(pqa('.body-mode-row select').map(s => s.disabled)));
 
@@ -853,6 +865,63 @@ f.onload = async () => {
                 preview().slice(0, 420));
             d.getElementById('panelCancel').click();
             await sleep(80);
+        // ---------- 恢复默认（出厂示例）----------
+        //
+        // 为什么需要这个按钮：草稿会自动存 localStorage，刷新加载的是**存档**而不是出厂示例，
+        // 所以改了出厂示例后光刷新看不到效果 —— 必须有个"恢复默认"能把它拉回来。
+        // 与「清空」语义不同：清空是空配置，恢复默认是出厂示例。
+        {
+            // confirm 在 headless 下默认返回 false（会直接 return，按钮等于没生效）
+            const origConfirm = w.confirm;
+            w.confirm = () => true;
+
+            // 先造一个"和出厂不一样"的状态，否则测不出按钮真的做了事
+            d.getElementById('clearBtn').click();
+            await sleep(120);
+            check('清空后是空配置（与出厂不同）',
+                parsePreview().providers.length === 0, JSON.stringify(parsePreview().providers.length));
+
+            d.getElementById('resetBtn').click();
+            await sleep(200);
+            const cfg = parsePreview();
+            check('恢复默认后有 1 条连接', cfg.providers.length === 1, String(cfg.providers.length));
+            check('  是 DeepSeek 连接', /api\.deepseek\.com/.test(cfg.providers[0].baseURL),
+                cfg.providers[0].baseURL);
+            check('  钉住两个模型', cfg.providers[0].models.length === 2,
+                JSON.stringify(cfg.providers[0].models.map(m => m.name)));
+            check('  模型名是 deepseek-flash / deepseek-pro',
+                cfg.providers[0].models[0].name === 'deepseek-flash'
+                && cfg.providers[0].models[1].name === 'deepseek-pro',
+                JSON.stringify(cfg.providers[0].models.map(m => m.name)));
+            check('  flash 声明 kind=vision（不是靠命名猜）',
+                cfg.providers[0].models[0].kind === 'vision', String(cfg.providers[0].models[0].kind));
+            check('  pro 声明 kind=text', cfg.providers[0].models[1].kind === 'text',
+                String(cfg.providers[0].models[1].kind));
+            check('  四个对话类用途全绑 flash',
+                JSON.stringify(cfg.purposes) === JSON.stringify({
+                    chat: ['flash'], compression: ['flash'], summarization: ['flash'], judge: ['flash'],
+                }), JSON.stringify(cfg.purposes));
+
+            // 界面上也要对得上：卡片角标、模型行。
+            // 注意用 qa（全页）而不是 pqa —— pqa 是 #panelBody 作用域，而用途卡片在左栏。
+            check('  用途卡片渲染出 4 个已绑定',
+                qa('.purpose-chip.picked').length === 4, String(qa('.purpose-chip.picked').length));
+            check('  4 个角标都是 1（各用途只绑一个）',
+                qa('.purpose-chip.picked').every(c => c.querySelector('.rank-badge').textContent === '1'),
+                JSON.stringify(qa('.purpose-chip.picked').map(c => c.querySelector('.rank-badge').textContent)));
+            // 连接卡片显示模型数
+            check('  连接卡片反映 2 个模型', /2 个模型/.test(qa('.pcard-meta').map(e => e.textContent).join(' ')),
+                qa('.pcard-meta').map(e => e.textContent).join(' | '));
+
+            // 关键：必须**落盘**，否则刷新又回到旧存档
+            await sleep(500);
+            const ls = w.localStorage.getItem('aiplugin4-config-v5-draft') || '';
+            check('  恢复默认写进了草稿（刷新不会退回旧存档）',
+                /deepseek-flash/.test(ls) && /deepseek-pro/.test(ls), ls.slice(0, 200));
+
+            w.confirm = origConfirm;
+        }
+
         // ---------- 顺序调整（providers[] 顺序即插件连接顺序，是真实语义） ----------
         {
             // 先建第二条连接，才能测顺序

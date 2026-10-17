@@ -1420,6 +1420,23 @@ $('clearBtn').onclick = () => {
     renderAll();
 };
 
+// 「恢复默认」：用出厂示例替换当前内容。
+//
+// 与「清空」的区别（两个都要有，语义不同）：
+//   清空     → 完全空的配置，从零开始搭
+//   恢复默认 → 出厂示例（DeepSeek + flash/pro），用来对照/回退到已知可用状态
+//
+// 存在意义之一：草稿会自动存 localStorage，刷新加载的是**存档**而不是出厂示例，
+// 所以改了出厂示例后光刷新是看不到效果的 —— 得有这个按钮。
+$('resetBtn').onclick = () => {
+    if (state.providers.length
+        && !confirm('恢复出厂示例？\n当前的连接、模型与用途绑定都会被替换。')) return;
+    state = factoryState();
+    scheduleSave();   // 落盘：否则刷新又会回到旧存档
+    renderAll();
+    toast('已恢复出厂示例：DeepSeek + deepseek-flash / deepseek-pro', 'ok');
+};
+
 $('maskKey').onchange = renderOutput;
 $('panelClose').onclick = closePanel;
 $('panelCancel').onclick = closePanel;
@@ -1521,25 +1538,43 @@ $('importConfirm').onclick = doImport;
 $('versionBadge').innerHTML =
     `适配 aiplugin4 v${TARGET_PLUGIN_VERSION}（v5 配置） · <a href="${PLUGIN_REPO_URL}" target="_blank" rel="noopener">源码</a>`;
 
-const saved = loadDraft();
-if (saved) {
-    state = saved;
-    // 立即回写一次：清掉旧版本可能残留在 localStorage 里的 API Key
-    scheduleSave();
-} else {
-    // 出厂示例：一条 DeepSeek 连接（与插件出厂默认一致）
+/**
+ * 出厂示例状态 —— **唯一的定义处**。
+ *
+ * 启动时（没有存档）与「恢复默认」按钮都调它。抽成函数是为了不让两处漂移：
+ * 之前这个对象只写在启动分支里，想"看修改效果"就只能手动清 localStorage。
+ *
+ * 与**插件的出厂默认**（`src/config/v5/default.ts`）保持一致：
+ * 一条 DeepSeek 连接 + 两个模型（flash=vision / pro=text）+ 四个对话类用途全绑 flash。
+ *
+ * 模型**显式声明 kind**：插件侧视觉已不再靠命名猜测（catalog.ts 删掉了
+ * GENERIC_VISION_PATTERNS），不声明就只能指望接口自报能力位，而模型列表拉取失败
+ * （CORS/离线/对方不报）时 flash 会掉成 text、视觉能力直接没了。
+ */
+function factoryState() {
     const tpl = getTemplate('deepseek');
-    state = {
+    return {
         providers: [{
             uid: nextUid(), templateId: 'deepseek', mode: 'vendor',
             provider: '', api: tpl.api, baseURL: tpl.baseUrl, apiKey: '',
-            // 出厂示例：**不写 kind**。理由与用户添加模型时相同（见 classify.js 的 decideKind）——
-            // 配置里的 kind 在插件侧绝对优先，猜一个 'text' 会把多模态模型（如 DeepSeek 的
-            // Flash 系）的视觉能力**钉死**成纯文本。留空让插件按自报能力位 + 命名判断。
-            models: [{ id: 'flash', name: 'deepseek-v4-flash' }],
+            models: [
+                { id: 'flash', name: 'deepseek-flash', kind: 'vision' },
+                { id: 'pro', name: 'deepseek-pro', kind: 'text' },
+            ],
             enabled: true, displayName: '', timeout: 0, request: {},
         }],
         purposes: { chat: ['flash'], compression: ['flash'], summarization: ['flash'], judge: ['flash'] },
+        useBodies: {},
+        extraGroups: [],
     };
+}
+
+const saved = loadDraft();
+if (saved) {
+    state = saved;
+    // 立即回写一次：把加载时补的 UI 字段（uid/templateId/mode）落盘
+    scheduleSave();
+} else {
+    state = factoryState();
 }
 renderAll();
