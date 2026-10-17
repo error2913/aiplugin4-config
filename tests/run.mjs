@@ -567,18 +567,24 @@ console.log('\n=== 导入时补上缺失的 provider（仅当路径能认出） 
 console.log('\n=== providerForTemplate：什么时候必须把 provider 写进配置 ===');
 {
     // 默认留空走自动识别；只有"地址反查不回自己"的模板才必须写。
-    // 这个值以前**从来没被写进草稿**，导致「百炼原生」模板失效 ——
-    // 用户选它、填专属域名，导出配置里没有 provider，插件用错预设，
-    // 把 /images/generations 拼到原生路径后面 → 百炼回 400 url error。
-    const ds = PROVIDER_TEMPLATES.find(t => t.id === 'dashscope');
+    //
+    // **现在没有任何模板属于那一类**：曾经有「百炼原生」（与阿里百炼共用 host、
+    // 反查必然得 alibaba，所以必须显式写 dashscope），但它已随兼容层一并删除 ——
+    // 插件侧现在按模型名分流（qwen-image 走兼容、wanx 与 TTS 走主机根原生端点），
+    // "选兼容还是选原生"不该让用户决定。
+    //
+    // dashscope 作为**逃生舱**保留（供应商标识可手填），应对"只暴露原生接口"的部署。
     const ali = PROVIDER_TEMPLATES.find(t => t.id === 'alibaba');
     const deep = PROVIDER_TEMPLATES.find(t => t.id === 'deepseek');
 
-    check('百炼原生：必须显式写 provider=dashscope',
-        providerForTemplate(ds) === 'dashscope', providerForTemplate(ds));
+    check('「百炼原生」模板已删除', !PROVIDER_TEMPLATES.some(t => t.id === 'dashscope'),
+        JSON.stringify(PROVIDER_TEMPLATES.map(t => t.id)));
     check('阿里百炼：地址能反查回自己 → 留空（不写冗余字段）',
         providerForTemplate(ali) === '', providerForTemplate(ali));
     check('DeepSeek：留空', providerForTemplate(deep) === '', providerForTemplate(deep));
+    check('所有模板都不需要显式写 provider（兼容层已接管）',
+        PROVIDER_TEMPLATES.every(t => providerForTemplate(t) === ''),
+        JSON.stringify(PROVIDER_TEMPLATES.filter(t => providerForTemplate(t) !== '').map(t => t.id)));
     check('自定义模板（无 provider）：留空', providerForTemplate({ provider: '', baseUrl: '' }) === '');
     check('空模板不炸', providerForTemplate(null) === '' && providerForTemplate(undefined) === '');
 
@@ -600,7 +606,7 @@ console.log('\n=== providerForTemplate：什么时候必须把 provider 写进�
 }
 console.log('\n=== 模板数据 ===');
 {
-    check('模板数量 12', PROVIDER_TEMPLATES.length === 12, String(PROVIDER_TEMPLATES.length));
+    check('模板数量 11（「百炼原生」已删）', PROVIDER_TEMPLATES.length === 11, String(PROVIDER_TEMPLATES.length));
     check('google 的 provider 是 google', PROVIDER_TEMPLATES.find(t => t.id === 'google').provider === 'google');
     check('anthropic 用 anthropic-messages 协议',
         PROVIDER_TEMPLATES.find(t => t.id === 'anthropic').api === 'anthropic-messages');

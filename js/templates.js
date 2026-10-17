@@ -31,18 +31,17 @@ export const PROVIDER_TEMPLATES = [
       notes: 'glm-4v 系列为视觉模型，需声明 kind = vision。' },
     { id: 'alibaba', label: '阿里百炼', provider: 'alibaba', api: 'openai-completions',
       baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', cors: 'allow',
-      modelHints: ['qwen-plus', 'text-embedding-v4', 'qwen-image-3.0-pro'],
+      modelHints: ['qwen-plus', 'text-embedding-v4', 'qwen-image-3.0-pro', 'qwen-audio-3.1-tts-flash', 'wanx2.1-t2i-turbo'],
+      // 百炼**只有一个入口**。曾经还有个「百炼原生」模板，已删除 —— 理由是插件侧做了兼容层：
+      //   · 生图：qwen-image 走兼容模式 /images/generations；wanx 走原生异步（预设里按模型名分流）
+      //   · TTS ：Qwen-Audio / CosyVoice 走**主机根**的原生端点（预设用 {origin} 表达，
+      //            与基址的路径前缀无关）
+      // 所以"选兼容模式还是原生"这件事不该让用户决定 —— 插件按模型名自己分流。
+      //
       // 这条注释曾经写的是「原生异步接口（wanx）请用自定义 URL」—— 直接把用户赶去填自定义 URL，
       // 而实际上兼容模式**已经支持 qwen-image 同步生图**（官方文档 POST /compatible-mode/v1/images/generations）。
-      // 选这个模板就什么都不用填：URL、请求体、取数路径全由插件的 alibaba 预设给。
-      notes: '兼容模式。对话、嵌入、以及 qwen-image 生图都走这里，选它即可，不用填 URL。'
-          + '需要 wanx 原生异步轮询时才改用「百炼原生」。' },
-    { id: 'dashscope', label: '百炼原生', provider: 'dashscope', api: 'openai-completions',
-      baseUrl: 'https://dashscope.aliyuncs.com', cors: 'allow',
-      modelHints: ['wanx2.1-t2i-turbo', 'qwen-image-3.0-pro'],
-      // 让"要原生接口"这件事有模板可选，而不是逼用户切到「自定义 URL」手填地址。
-      notes: '百炼原生接口（非兼容模式）。wanx 异步生图 / 需要原生请求结构时用。'
-          + '地址只填到域名，路径由插件预设拼接。' },
+      notes: '对话、嵌入、生图（qwen-image / wanx）、语音合成（Qwen-Audio / CosyVoice）都走这一条。'
+          + '选它即可，不用填 URL；wanx 异步与原生 TTS 由插件自动路由到主机根的原生端点。' },
     { id: 'google', label: 'Google Gemini', provider: 'google', api: 'openai-completions',
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', cors: 'unreach',
       modelHints: ['gemini-2.5-flash', 'gemini-embedding-001'],
@@ -157,12 +156,12 @@ export function vendorByEndpointPath(url) {
  * 默认**不写**（返回 ''）：v5 的设计是 provider 留空、由插件按 baseURL 反查（方案 2.3.2）——
  * 配置更紧凑，且用户之后把 URL 改到别的厂商时自动识别仍然正确。
  *
- * 但有一类模板**必须写**：它的地址反查回来的不是它自己。
- * 目前只有「百炼原生」—— 它与「阿里百炼」共用 host `dashscope.aliyuncs.com`
+ * 有一类模板**必须写**：它的地址反查回来的不是它自己（现已无此类模板 —— 「百炼原生」已删除）。
+ * 曾经只有「百炼原生」—— 它与「阿里百炼」共用 host `dashscope.aliyuncs.com`
  * （`resolveVendorFromUrl` 只看 host），反查必然得 `alibaba`。
  *
  * 这个值以前**从来没被写进草稿**（面板的 sel.onchange 只设了 templateId/api/baseURL），
- * 所以「百炼原生」模板等于失效：选了它，导出的配置里没有 provider，
+ * 所以那个模板曾经等于失效：选了它，导出的配置里没有 provider，
  * 插件按 URL 反查得到 alibaba 或空（专属域名）→ 用错预设 → 把 `/images/generations`
  * 拼到原生路径后面 → 百炼回 400 `url error, please check url！`（端点与模型不匹配）。
  *

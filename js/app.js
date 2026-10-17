@@ -336,7 +336,7 @@ function renderPanel() {
                 draft.templateId = draft.lastVendorTemplateId || 'deepseek';
                 const t = getTemplate(draft.templateId);
                 draft.api = t.api;
-                // 与 sel.onchange 一致：provider 由模板决定（通常留空，百炼原生必须写）
+                // 与 sel.onchange 一致：provider 由模板决定（**现在所有模板都留空** —— 兼容层接管了）
                 draft.provider = providerForTemplate(t);
                 if (!draft.baseUrlTouched) draft.baseURL = t.baseUrl;
             }
@@ -361,7 +361,7 @@ function renderPanel() {
             draft.templateId = t.id;
             draft.api = t.api;
             // provider 见 providerForTemplate：通常留空走自动识别，
-            // 只有"地址反查不回自己"的模板（百炼原生）才显式写。
+            // 现在没有任何模板需要显式写（曾经只有「百炼原生」，已删除）。
             draft.provider = providerForTemplate(t);
             // URL 没被手改过才跟随供应商切换（方案 9.2 的约定）
             if (!draft.baseUrlTouched) draft.baseURL = t.baseUrl;

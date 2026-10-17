@@ -29,26 +29,29 @@ frame.onload = async () => {
     q('.pcard .btn-edit').click();
     await sleep(120);
 
-    // 选「百炼原生」模板
+    // 选「阿里百炼」模板（百炼现在**只有一个入口**；「百炼原生」已删除）
     const provSel = pqa('select')[0];
-    const dsOpt = [...provSel.options].find(o => o.textContent.includes('百炼原生'));
-    lines.push('供应商下拉含「百炼原生」: ' + !!dsOpt);
-    provSel.value = dsOpt.value;
+    const aliOpt = [...provSel.options].find(o => o.textContent.includes('阿里百炼'));
+    lines.push('供应商下拉含「阿里百炼」: ' + !!aliOpt);
+    lines.push('  下拉里不再有「百炼原生」: ' + ![...provSel.options].some(o => o.textContent.includes('百炼原生')));
+    provSel.value = aliOpt.value;
     provSel.dispatchEvent(new w.Event('change', { bubbles: true }));
     await sleep(100);
     lines.push('模板默认 URL: ' + q('#urlIn').value);
 
-    // 改成专属域名
+    // 改成专属域名（**保留 /compatible-mode/v1** —— 那是兼容模式基址，生图走它）
     const urlIn = q('#urlIn');
-    urlIn.value = HOST;
+    urlIn.value = HOST + '/compatible-mode/v1';
     urlIn.dispatchEvent(new w.Event('input', { bubbles: true }));
     await sleep(80);
     lines.push('改成专属域名后 URL: ' + urlIn.value);
 
-    // 供应商标识应仍是 dashscope（模板设的，不该被 URL 覆盖）
+    // 专属域名 host 认不出 → provider 留空（走通用兼容结构），**不该**出形态警示
     const vIn = pqa('.field input').find(i => i.getAttribute('list') === 'vendorOptions');
-    lines.push('供应商标识字段值: ' + JSON.stringify(vIn.value));
+    lines.push('供应商标识字段值: ' + JSON.stringify(vIn.value) + '（专属域名认不出，留空是正常的）');
     lines.push('生效提示: ' + (q('.detected-vendor') ? q('.detected-vendor').textContent : '(无)'));
+    const warn = q('#panelBody .field-note.vendor-warn');
+    lines.push('形态警示: ' + (warn ? warn.textContent.slice(0, 60) : '(无，正确)'));
 
     // 填 key + 加模型
     const keyIn = q('#panelBody .key-row input');
@@ -84,7 +87,7 @@ frame.onload = async () => {
     lines.push('  模型     = ' + JSON.stringify(qm));
     lines.push('  purposes = ' + JSON.stringify(cfg.purposes));
 
-    const ok = p.baseURL === HOST && p.provider === 'dashscope' && qm.kind === 'gen'
+    const ok = p.baseURL === HOST + '/compatible-mode/v1' && qm.kind === 'gen'
         && Array.isArray(cfg.purposes['image-generation'])
         && cfg.purposes['image-generation'][0] === qm.id;
     lines.push('');

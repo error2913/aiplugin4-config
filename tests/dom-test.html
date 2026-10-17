@@ -575,12 +575,21 @@ f.onload = async () => {
             d.getElementById('panelCancel').click();  // 关掉，避免影响后续用例
         }
 
-        // ---------- 选模板必须带上 provider（百炼原生那条 400 的根因） ----------
+        // ---------- 百炼只有一个入口（「百炼原生」模板已删除） ----------
         {
             d.querySelector('.pcard .btn-edit').click();
             await sleep(120);
             const provSel = pqa('select')[0];
             const vendorInput = () => pqa('.field input').find(i => i.getAttribute('list') === 'vendorOptions');
+
+            // 模板列表里**不该**再有「百炼原生」—— 兼容层做好后，"选兼容还是选原生"
+            // 不该让用户决定（插件按模型名分流：qwen-image 走兼容、wanx/TTS 走主机根原生）。
+            const labels = [...provSel.options].map(o => o.textContent);
+            check('模板列表不再有「百炼原生」', !labels.some(t => t.includes('百炼原生')),
+                JSON.stringify(labels));
+            check('百炼只剩「阿里百炼」一个入口',
+                labels.filter(t => t.includes('百炼')).length === 1,
+                JSON.stringify(labels.filter(t => t.includes('百炼'))));
 
             // 默认 DeepSeek：地址能反查回自己 → provider 留空（不写冗余字段）
             const deepOpt = [...provSel.options].find(o => o.textContent.includes('DeepSeek'));
@@ -590,33 +599,48 @@ f.onload = async () => {
             check('DeepSeek 模板：provider 留空（走自动识别）',
                 vendorInput().value === '', JSON.stringify(vendorInput().value));
 
-            // 百炼原生：与阿里百炼共用 host，反查不回自己 → **必须**写 dashscope
-            const dsOpt = [...provSel.options].find(o => o.textContent.includes('百炼原生'));
-            check('供应商下拉含「百炼原生」', !!dsOpt);
-            provSel.value = dsOpt.value;
+            // 阿里百炼：地址（/compatible-mode/v1）能反查回 alibaba → provider 也留空
+            const aliTplOpt = [...provSel.options].find(o => o.textContent.includes('阿里百炼'));
+            provSel.value = aliTplOpt.value;
             provSel.dispatchEvent(new w.Event('change', { bubbles: true }));
             await sleep(80);
-            check('百炼原生模板：provider 自动填 dashscope',
-                vendorInput().value === 'dashscope', JSON.stringify(vendorInput().value));
-            check('  生效提示写「手工指定」',
-                /dashscope（手工指定）/.test(pq('.detected-vendor').textContent),
+            check('阿里百炼模板：provider 留空（地址可反查）',
+                vendorInput().value === '', JSON.stringify(vendorInput().value));
+            check('  生效提示写「按 API 地址自动识别」',
+                /自动识别/.test(pq('.detected-vendor').textContent),
                 pq('.detected-vendor').textContent);
-            check('  URL 是官方根地址', q('#urlIn').value === 'https://dashscope.aliyuncs.com',
+            check('  URL 是兼容模式基址',
+                q('#urlIn').value === 'https://dashscope.aliyuncs.com/compatible-mode/v1',
                 q('#urlIn').value);
 
-            // 改成专属域名后：provider 必须保留，状态提示要跟着更新
+            // 改成专属域名：host 认不出 → 提示"无（按 OpenAI 兼容处理）"，
+            // 但**不该**因此出警示（alibaba + 兼容模式基址是自洽的）
             const urlIn = q('#urlIn');
-            urlIn.value = 'https://llm-w67ttc0b3gqiltm8.cn-beijing.maas.aliyuncs.com';
+            urlIn.value = 'https://llm-w67ttc0b3gqiltm8.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
             urlIn.dispatchEvent(new w.Event('input', { bubbles: true }));
             await sleep(80);
-            check('改专属域名后 provider 仍保留', vendorInput().value === 'dashscope',
+            check('改专属域名后 provider 仍留空', vendorInput().value === '',
                 JSON.stringify(vendorInput().value));
-            check('  状态提示不再停留在旧结论（曾显示 alibaba）',
-                !/alibaba/.test(pq('.detected-vendor').textContent),
+            check('  状态提示跟着重算（不再停留旧结论）',
+                !/aliyuncs\.com（手工指定）/.test(pq('.detected-vendor').textContent),
                 pq('.detected-vendor').textContent);
-            check('  状态提示仍是 dashscope（手工指定）',
+            check('  alibaba + 兼容模式基址 → 不出形态警示',
+                !pq('.field-note.vendor-warn'),
+                (pq('.field-note.vendor-warn') || {}).textContent || '(无)');
+
+            // 供应商标识仍是可选逃生舱：手工填 dashscope 应对"只暴露原生接口"的部署
+            vendorInput().value = 'dashscope';
+            vendorInput().dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(80);
+            check('手工填 dashscope 仍可用（逃生舱保留）',
                 /dashscope（手工指定）/.test(pq('.detected-vendor').textContent),
                 pq('.detected-vendor').textContent);
+            check('  此时出形态警示（原生 provider + 兼容模式基址 = 会拼错）',
+                !!pq('.field-note.vendor-warn'),
+                (pq('.field-note.vendor-warn') || {}).textContent || '(无)');
+            vendorInput().value = '';
+            vendorInput().dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(80);
 
             // 切回阿里百炼：provider 应清空（它的地址能反查回自己）
             const aliOpt = [...provSel.options].find(o => o.textContent.includes('阿里百炼'));
