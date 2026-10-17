@@ -477,6 +477,21 @@ function renderPanel() {
                 + '这里应填 dashscope。';
         }
 
+        // ---- 模型与接入方式不兼容
+        //
+        // 官方文档明确：**Qwen-Audio 不支持 OpenAI 兼容协议，仅支持 DashScope 协议**
+        // （见「OpenAI Chat接口兼容」）。所以 qwen-audio-* 系列放在兼容模式连接里
+        // **根本没有对应接口** —— 无论 provider 填什么，都会 404。
+        // 实测踩过：把 qwen-audio-3.1-tts-flash 和 qwen-image 放同一条兼容模式连接 → TTS 404。
+        let modelNote = '';
+        const modelNames = (draft.models || []).map(m => m.name || '');
+        const qwenAudio = modelNames.filter(n => /qwen-audio/i.test(n));
+        if (qwenAudio.length && url.includes('/compatible-mode')) {
+            modelNote = `⚠ ${qwenAudio.join(' / ')} 属 Qwen-Audio 系列，**不支持 OpenAI 兼容协议**`
+                + '（官方文档：仅支持 DashScope 协议）—— 放在兼容模式连接里必然 404。'
+                + '请**另开一条原生连接**：baseURL 填 host 根（不带 /compatible-mode/v1），供应商标识填 dashscope。';
+        }
+
         vNote.textContent = [
             explicit
                 ? '已手工指定，覆盖自动识别。'
@@ -485,8 +500,9 @@ function renderPanel() {
                     : '该地址未收录。若它代理的是某家原生接口（如百炼原生 wanx、Google Cloud TTS），请在此填写对方标识；否则留空按 OpenAI 兼容处理。'),
             usesNote,
             mismatchNote,
+            modelNote,
         ].filter(Boolean).join(' ');
-        vNote.classList.toggle('vendor-warn', !!mismatchNote);
+        vNote.classList.toggle('vendor-warn', !!(mismatchNote || modelNote));
     }
     updateVendorStatus();
     body.appendChild(vWrap);
