@@ -64,7 +64,7 @@ export function parseRolesImport(text) {
     return { ok: true, items };
 }
 
-/** 从 .md / .txt 文件转一个角色：角色名取文件名，正文即设定（不解析 frontmatter） */
+/** 从 .md / .txt 文件转一个角色：角色名取文件名，正文即设定 */
 export function roleFromFile(filename, text) {
     const raw = normalizeText(text).trim();
     const file = String(filename ?? '').split(/[\\/]/).pop() || '(未命名)';
@@ -120,3 +120,4 @@ export const rolesSpec = {
         '重载 JS 生效；.ai role 可切换角色。',
     ],
 };
+
