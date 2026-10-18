@@ -134,6 +134,16 @@ console.log('\n=== 构建与序列化 ===');
     check('空模型清单不写 models 字段', cfg2.providers[0].models === undefined, JSON.stringify(cfg2.providers[0]));
     check('空 purposes 不写该字段', cfg2.purposes === undefined);
     check('空模型清单无 groups（无用途绑定）', cfg2.groups === undefined);
+
+    // 启用开关：停用的连接直接移除，不写 enabled 字段；绑定到它模型的用途一并过滤
+    const off = goodProvider({ enabled: false });
+    const cfgOff = build([off], { chat: 'm1' });
+    check('停用连接从输出移除', cfgOff.providers.length === 0, JSON.stringify(cfgOff.providers));
+    check('停用连接的用途绑定被过滤', cfgOff.purposes === undefined, JSON.stringify(cfgOff.purposes));
+    check('输出不含 enabled 键', !serialize(cfgOff).includes('"enabled"'));
+    const mixed = build([goodProvider({ enabled: false, apiKey: '' }), goodProvider({ id: 'p2', models: [{ id: 'm2', name: 'x' }] })], { chat: 'm2' });
+    check('停用连接不参与输出', mixed.providers.length === 1 && mixed.providers[0].models[0].id === 'm2', JSON.stringify(mixed.providers));
+    check('停用连接的空 Key 不阻塞校验', validate([goodProvider({ enabled: false, apiKey: '' }), goodProvider({ id: 'p2', models: [{ id: 'm2', name: 'x' }] })], {}).length === 0);
 }
 
 console.log('\n=== 遮蔽 API Key ===');

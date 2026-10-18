@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>角色 / 技能 / MCP / 知识库交互测试</title></head>
+<body>
+<h1>角色 / 技能 / MCP / 知识库交互测试</h1>
+<ol id="results"></ol>
+<iframe id="frame" src="/index.html" width="1500" height="950"></iframe>
+<script>
+// 与 dom-test.html 同一套路：iframe 驱动真实页面，从干净草稿开始。
+try { localStorage.clear(); } catch (e) { /* ignore */ }
+const log = [];
+function check(name, cond, extra) {
+    log.push((cond ? 'PASS  ' : 'FAIL  ') + name + (cond ? '' : '  :: ' + (extra ?? '')));
+}
+function render() {
+    const ol = document.getElementById('results');
+    ol.innerHTML = '';
+    for (const line of log) {
+        const li = document.createElement('li');
+        li.textContent = line;
+        ol.appendChild(li);
+    }
+}
+const f = document.getElementById('frame');
+
+f.onload = async () => {
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const w = f.contentWindow;
+    const d = f.contentDocument;
+    w.confirm = () => true;
+    const q = (s) => d.querySelector(s);
+    const qa = (s) => [...d.querySelectorAll(s)];
+    const shown = (elm) => {
+        if (!elm) return false;
+        const cs = w.getComputedStyle(elm);
+        return cs.display !== 'none' && cs.visibility !== 'hidden';
+    };
+    const json = (id) => JSON.parse(d.getElementById(id).textContent);
+    const clickTab = async (view) => {
+        const btn = d.querySelector(`[data-view="${view}"]`);
+        btn.click();
+        await sleep(30);
+    };
+    const cardCount = (id) => d.querySelectorAll(`#${id}Cards .dcard:not(.dcard-add)`).length;
+    const findBtn = (root, text) => [...root.querySelectorAll('button')].find(b => b.textContent.trim() === text);
+
+    try {
+        await sleep(80);
+
+        // ---------- 页签与默认内容 ----------
+        check('6 个页签', qa('.view-tab').length === 6, qa('.view-tab').length);
+        check('默认显示模型配置', shown(d.getElementById('modelLayout')));
+        check('内容分区默认隐藏', !shown(d.getElementById('rolesLayout')) && !shown(d.getElementById('skillsLayout')));
+
+        await clickTab('roles');
+        check('切到角色设定', shown(d.getElementById('rolesLayout')) && !shown(d.getElementById('modelLayout')));
+        check('角色默认 1 条', cardCount('roles') === 1, cardCount('roles'));
+        const rolesDefault = json('rolesPreview');
+        check('角色默认内容与插件一致',
+            rolesDefault.version === 1 && rolesDefault.roles.length === 1 &&
+            rolesDefault.roles[0].name === '测试机器人' &&
+            rolesDefault.roles[0].prompt.includes('正在进行开发测试'),
+            JSON.stringify(rolesDefault).slice(0, 120));
+
+        // 启用开关：关闭 = 从输出移除，不产生 enabled 键
+        const roleToggle = d.querySelector('#rolesCards .dcard input[type="checkbox"]');
+        check('角色卡片有启用开关', !!roleToggle);
+        roleToggle.checked = false;
+        roleToggle.dispatchEvent(new w.Event('change', { bubbles: true }));
+        await sleep(40);
+        const rolesOff = json('rolesPreview');
+        check('停用角色后输出为空', rolesOff.roles.length === 0, JSON.stringify(rolesOff));
+        check('角色输出不含 enabled 键', !JSON.stringify(rolesOff).includes('"enabled"'));
+        roleToggle.checked = true;
+        roleToggle.dispatchEvent(new w.Event('change', { bubbles: true }));
+        await sleep(40);
+
+        await clickTab('skills');
+        check('技能默认 1 条', cardCount('skills') === 1, cardCount('skills'));
+        const skillsDefault = json('skillsPreview');
+        check('技能默认名 = 录卡', skillsDefault.skills[0].name === '录卡');
+        check('技能默认正文非空', skillsDefault.skills[0].content.length > 100);
+
+        await clickTab('mcp');
+        check('MCP 默认 3 台', cardCount('mcp') === 3, cardCount('mcp'));
+        const mcpDefault = json('mcpPreview');
+        check('MCP 输出标准 mcpServers 对象', !!mcpDefault.mcpServers && !Array.isArray(mcpDefault.mcpServers));
+        check('MCP 默认包含 mcp-files-exec / md-html-render / mcp-browser',
+            Object.keys(mcpDefault.mcpServers).join(',') === 'mcp-files-exec,md-html-render,mcp-browser');
+        check('md-html-render 限定 QQ',
+            JSON.stringify(mcpDefault.mcpServers['md-html-render'].platform) === '["QQ"]');
+
+        await clickTab('kb');
+        check('知识库默认 3 个', cardCount('kb') === 3, cardCount('kb'));
+        const kbDefault = json('kbPreview');
+        check('知识库默认包含 3 个库', kbDefault.libraries.length === 3);
+        check('ob11-api 限定 QQ',
+            JSON.stringify(kbDefault.libraries[2].platform) === '["QQ"]');
+
+        // ---------- 返回模型页不丢 ----------
+        await clickTab('model');
+        check('切回模型配置', shown(d.getElementById('modelLayout')) && !shown(d.getElementById('kbLayout')));
+        check('模型页预览仍存在', d.getElementById('preview').textContent.length > 10);
+
+        // ---------- 角色：添加 / 编辑 ----------
+        await clickTab('roles');
+        d.querySelector('#rolesCards .dcard-add').click();
+        await sleep(30);
+        check('打开角色编辑面板', shown(d.getElementById('domainPanel')));
+        const nameInput = d.getElementById('domainField_roles_name');
+        const promptInput = d.getElementById('domainField_roles_prompt');
+        nameInput.value = '新角色';
+        nameInput.dispatchEvent(new w.Event('input', { bubbles: true }));
+        promptInput.value = '你是新角色。';
+        promptInput.dispatchEvent(new w.Event('input', { bubbles: true }));
+        d.getElementById('domainPanelSave').click();
+        await sleep(50);
+        check('角色卡数量 +1', cardCount('roles') === 2, cardCount('roles'));
+        const rolesAfter = json('rolesPreview');
+        check('新增角色进入输出',
+            rolesAfter.roles[1].name === '新角色' && rolesAfter.roles[1].prompt === '你是新角色。',
+            JSON.stringify(rolesAfter.roles));
+
+        // 草稿持久化（debounce 350ms）
+        await sleep(500);
+        check('角色草稿已写入 localStorage',
+            (w.localStorage.getItem('aiplugin4-config-roles-draft') || '').includes('新角色'));
+
+        // ---------- 角色：恢复默认 ----------
+        d.getElementById('rolesReset').click();
+        await sleep(30);
+        check('恢复默认后角色回到 1 条', cardCount('roles') === 1, cardCount('roles'));
+
+        // ---------- 导入 / 非法导入 ----------
+        d.getElementById('rolesImportOpen').click();
+        await sleep(20);
+        check('导入使用统一对话框', shown(d.getElementById('importPanel')));
+        d.getElementById('importText').value = JSON.stringify({ version: 1, roles: [{ name: '导入角色', prompt: '导入内容' }] });
+        d.getElementById('importConfirm').click();
+        await sleep(40);
+        const rolesImported = json('rolesPreview');
+        check('导入 JSON 生效', rolesImported.roles[0].name === '导入角色');
+
+        d.getElementById('rolesImportOpen').click();
+        await sleep(20);
+        d.getElementById('importText').value = '{bad json';
+        d.getElementById('importConfirm').click();
+        await sleep(30);
+        check('非法导入显示错误', !d.getElementById('importMsg').hidden);
+        check('非法导入不改动内容', json('rolesPreview').roles[0].name === '导入角色');
+        // 关掉统一对话框，避免遮挡后续点击
+        d.getElementById('importCancel').click();
+        await sleep(20);
+
+        // ---------- 校验阻断复制 ----------
+        d.querySelector('#rolesCards .dcard-add').click();
+        await sleep(30);
+        d.getElementById('domainPanelSave').click(); // 空名称/空内容
+        await sleep(40);
+        check('空角色触发校验错误', !d.getElementById('rolesValidation').hidden);
+        check('校验错误时复制按钮禁用', d.getElementById('rolesCopy').disabled);
+        // 删掉空角色
+        const emptyCard = qa('#rolesCards .dcard').find(card => card.textContent.includes('（未命名）'));
+        findBtn(emptyCard, '删除').click();
+        await sleep(40);
+        check('删除空角色后复制恢复', !d.getElementById('rolesCopy').disabled);
+
+        // ---------- MCP：遮蔽 / 单服务器停用 ----------
+        await clickTab('mcp');
+        d.getElementById('mcpMask').checked = true;
+        d.getElementById('mcpMask').dispatchEvent(new w.Event('change', { bubbles: true }));
+        const maskedText = d.getElementById('mcpPreview').textContent;
+        check('遮蔽后不含 Bearer token', !maskedText.includes('Bearer token'), maskedText.slice(0, 160));
+        check('遮蔽后有占位符', maskedText.includes('"xxxx"'));
+        d.getElementById('mcpMask').checked = false;
+        d.getElementById('mcpMask').dispatchEvent(new w.Event('change', { bubbles: true }));
+
+        const firstMcpCard = d.querySelector('#mcpCards .dcard');
+        const mcpToggle = firstMcpCard.querySelector('input[type="checkbox"]');
+        check('MCP 卡片有启用开关', !!mcpToggle);
+        mcpToggle.checked = false;
+        mcpToggle.dispatchEvent(new w.Event('change', { bubbles: true }));
+        await sleep(50);
+        const mcpAfter = json('mcpPreview');
+        check('停用后 MCP 服务器从输出移除', !('mcp-files-exec' in mcpAfter.mcpServers),
+            JSON.stringify(Object.keys(mcpAfter.mcpServers)));
+        check('MCP 输出不含 enabled 键', !JSON.stringify(mcpAfter).includes('"enabled"'));
+        mcpToggle.checked = true;
+        mcpToggle.dispatchEvent(new w.Event('change', { bubbles: true }));
+        await sleep(40);
+
+        // ---------- 文件导入（技能） ----------
+        await clickTab('skills');
+        const before = cardCount('skills');
+        const dt = new w.DataTransfer();
+        const file = new w.File(['---\nname: 文件技能\ndescription: 来自文件\nplatform: [QQ]\n---\n# 正文\n内容'], 'from-file.md', { type: 'text/markdown' });
+        dt.items.add(file);
+        const zone = d.getElementById('skillsDrop');
+        const ev = new w.Event('drop', { bubbles: true, cancelable: true });
+        Object.defineProperty(ev, 'dataTransfer', { value: dt });
+        zone.dispatchEvent(ev);
+        await sleep(400);
+        check('文件导入后技能 +1', cardCount('skills') === before + 1, `${before} -> ${cardCount('skills')}`);
+        const skillsAfter = json('skillsPreview');
+        const importedSkill = skillsAfter.skills.find(s => s.name === '文件技能');
+        check('文件导入解析 name/description/platform',
+            !!importedSkill && importedSkill.description === '来自文件' &&
+            JSON.stringify(importedSkill.platform) === '["QQ"]',
+            JSON.stringify(importedSkill));
+
+        // ---------- 知识库：添加库 ----------
+        await clickTab('kb');
+        d.querySelector('#kbCards .dcard-add').click();
+        await sleep(30);
+        const kbName = d.getElementById('domainField_kb_name');
+        const kbContent = d.getElementById('domainField_kb_content');
+        kbName.value = '新库';
+        kbName.dispatchEvent(new w.Event('input', { bubbles: true }));
+        kbContent.value = '# 新库\n\n内容';
+        kbContent.dispatchEvent(new w.Event('input', { bubbles: true }));
+        d.getElementById('domainPanelSave').click();
+        await sleep(40);
+        const kbAfter = json('kbPreview');
+        check('知识库可新增', kbAfter.libraries.some(l => l.name === '新库'), JSON.stringify(kbAfter.libraries.map(l => l.name)));
+
+        // ---------- 深链 / 页签按钮状态 ----------
+        check('当前页签按钮 aria-selected',
+            d.querySelector('[data-view="kb"]').getAttribute('aria-selected') === 'true');
+    } catch (e) {
+        check('测试过程未抛异常', false, e instanceof Error ? e.stack : String(e));
+    }
+    render();
+    document.title = `DONE ${log.filter(x => x.startsWith('FAIL')).length}`;
+};
+</script>
+</body>
+</html>

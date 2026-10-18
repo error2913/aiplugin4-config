@@ -2,10 +2,13 @@
   "name": "aiplugin4-config",
   "version": "0.1.0",
   "private": true,
-  "description": "aiplugin4「api连接」可视化配置生成器（零依赖纯静态）",
+  "description": "aiplugin4 配置生成器（模型 / 联网 / 角色 / 技能 / MCP / 知识库，零依赖纯静态）",
   "type": "module",
   "scripts": {
-    "test": "node tests/run.mjs",
+    "test": "node tests/run.mjs && node tests/domains-run.mjs && node tests/web-check.mjs",
+    "test:domains": "node tests/domains-run.mjs",
+    "test:web": "node tests/web-check.mjs",
+    "sync:defaults": "node tools/sync-default-data.mjs",
     "serve": "node serve.mjs"
   },
   "repository": "https://github.com/error2913/aiplugin4-config",

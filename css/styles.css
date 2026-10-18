@@ -752,6 +752,8 @@ body:has(.update-bar) { padding-top: 46px; }
   flex-direction: column;
   gap: 12px;
 }
+/* 放进统一右侧编辑面板时去掉卡片内联时的分隔线 */
+.side-editor .web-edit { border-top: none; margin-top: 0; padding-top: 0; }
 .web-edit .field { margin-bottom: 0; }
 .web-edit textarea { font-family: var(--mono); font-size: var(--fs-xs); }
 .web-defaults {
@@ -768,4 +770,91 @@ body:has(.update-bar) { padding-top: 46px; }
 .web-import .json-area { margin: 10px 0; }
 .web-defaults .field { margin-bottom: 4px; }
 .validation .vtitle.warn { color: #e3b341; }
+
+/* ---------- 角色 / 技能 / MCP / 知识库分区 ---------- */
+/* 6 个页签在窄屏下换行，不横向溢出 */
+.view-tabs { flex-wrap: wrap; }
+
+.drop-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 14px 12px;
+  margin-bottom: 14px;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease),
+              color var(--dur) var(--ease);
+}
+.drop-zone strong { color: var(--text-dim); font-size: var(--fs-sm); font-weight: 600; }
+.drop-zone.drag-over {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(79, 140, 255, .06);
+}
+
+.file-msg {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  padding: 10px 12px;
+  margin-top: 12px;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  line-height: 1.6;
+  max-height: 220px;
+  overflow: auto;
+}
+.file-msg .vtitle { color: var(--text); font-weight: 600; margin-bottom: 4px; }
+.file-msg ul { margin: 0; padding-left: 18px; }
+.file-msg li { margin: 3px 0; }
+
+/* 内容分区的卡片用自己的类名：模型页的 .pcard 被交互测试按全局选择器断言，
+   两套卡片共用类名会把测试数量撞在一起，也容易在样式上互相牵连。 */
+.dcard {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-elev); padding: 13px 14px 12px;
+  display: flex; flex-direction: column; gap: 4px; min-height: 122px;
+  transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease),
+              box-shadow var(--dur) var(--ease);
+}
+@media (hover: hover) {
+  .dcard:not(.dcard-add):hover {
+    border-color: var(--border-strong);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .32);
+  }
+}
+.dcard-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dcard-title { font-weight: 640; font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dcard-id { font-family: var(--mono); font-size: var(--fs-2xs); color: var(--text-faint); }
+.dcard-meta {
+  font-size: var(--fs-xs); color: var(--text-dim); flex: 1;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.dcard-actions { display: flex; gap: 6px; margin-top: 8px; }
+.dcard-actions .btn { flex: 1; }
+.dcard-actions .btn-move { flex: 0 0 32px; padding: 6px 0; font-size: var(--fs-xs); }
+.dcard-actions .btn-move:disabled { opacity: .3; }
+.dcard-add {
+  border: 1px dashed var(--border-strong); background: transparent; color: var(--text-dim);
+  align-items: center; justify-content: center; font-size: var(--fs-sm); cursor: pointer;
+  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease),
+              background var(--dur) var(--ease);
+}
+.dcard-add:hover { border-color: var(--accent); color: var(--accent); background: rgba(79, 140, 255, .06); }
+.dcard.is-off { opacity: .62; }
+.dcard.is-off:hover { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .drop-zone, .dcard { transition: none; }
+}
+@media (hover: hover) and (prefers-reduced-motion: reduce) {
+  .dcard:not(.dcard-add):hover { transform: none; }
+}
 

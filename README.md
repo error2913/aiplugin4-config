@@ -1,11 +1,11 @@
 # aiplugin4 配置生成器
 
-给 [aiplugin4](https://github.com/error2913/aiplugin4)（SealDice AI 插件）用的**模型 / 联网搜索配置可视化生成器**。
+给 [aiplugin4](https://github.com/error2913/aiplugin4)（SealDice AI 插件）用的**模型 / 联网 / 角色 / 技能 / MCP / 知识库配置可视化生成器**。
 
-点选供应商 → 填 API Key → 选模型（或选搜索方言）→ 复制生成的 JSON 粘进海豹，不用手写配置。
+点选供应商 → 填 API Key → 选模型（或选搜索方言 / 编辑条目）→ 复制生成的 JSON 粘进海豹，不用手写配置。
 
 > **零依赖纯静态页面**，双击 `index.html` 即可跑（建议用 `node serve.mjs`，见「用法」）。
-> 产出 **v5 JSON 模型配置**（单框）与**联网配置 JSON**（插件「联网」页）；插件侧见下方「适配状态」。
+> 产出 **v5 JSON 模型配置**、**联网配置 JSON**，以及**角色设定 / 技能 / MCP / 知识库四份 JSON**（各自单框，分别粘贴）；插件侧见下方「适配状态」。
 
 ## 为什么需要它
 
@@ -65,6 +65,7 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 - **遮蔽 API Key**：导出时换成 `sk-xxxx`，方便截图分享
 - **格式化开关**：输出默认紧凑单行，打开后多行缩进（模型 / 联网两个输出窗口都有）
 - **本地草稿**：自动存 localStorage
+- **角色 / 技能 / MCP / 知识库四个页签**：各自生成一份 JSON；支持文件导入（SKILL.md / Markdown / 文本 / MCP JSON）、JSON 导入导出、MCP 敏感信息遮蔽（详见下文）
 
 ### 联网搜索分区
 
@@ -76,10 +77,40 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 - **generic** 用 JSON 描述任意 HTTP 搜索/抓取接口（请求模板占位符 + 响应取数路径），不用改插件代码；Jina Reader 这类未内置的走它；
 - 右侧实时产出「联网配置」，可复制 / 下载 / 导入；校验不通过时禁止复制；
 - 默认输出**紧凑单行**（省版面、直接可粘贴）；「**格式化**」开关可展开为多行缩进，便于阅读；
-- 字段与插件侧 schema v1 对应（插件侧尚在方案阶段，当前产出用于对齐格式；各家的请求/响应格式见插件仓库 `docs/18-联网搜索与抓取接入方案.md` §6.7）。
-- OpenAI / Anthropic / Gemini / xAI / Qwen 等**模型自带的托管搜索**不是独立 provider，属于模型请求参数，见插件仓库 `docs/18` §6.8（模型页「请求与响应格式」里注入）。
+- 字段与插件侧 schema v1 对应；**返回条数 / 详细程度 / 超时 / 正文截断 / 失败回退不再写进 JSON**，它们是插件「联网」页的独立配置项（返回条数、联网搜索详细程度、联网搜索超时、联网搜索正文截断、联网搜索失败回退），生成器不再输出 `defaults`。
+- OpenAI / Anthropic / Gemini / xAI / Qwen 等**模型自带的托管搜索**不是独立 provider，属于模型请求参数，见插件仓库 `docs/04 工具系统`。
 
 纯逻辑在 `js/web.js`，自检：`node tests/web-check.mjs`。
+
+### 角色 / 技能 / MCP / 知识库分区
+
+顶栏另外四个页签分别生成一份独立 JSON，各自粘贴到插件对应配置项（都是**单框 String 配置**）：
+
+| 页签 | 粘到插件 | JSON 形态 | 生效方式 |
+| --- | --- | --- | --- |
+| 角色设定 | 角色设定 →「角色设定（JSON）」 | `{version:1, roles:[{name,prompt}]}` | 重载 JS；`.ai role` 切换 |
+| 技能 | 技能 →「技能配置（JSON）」 | `{version:1, skills:[{name,description,platform,content}]}` | `.ai skill refresh` |
+| MCP | MCP →「MCP服务器配置（JSON）」 | **标准 MCP JSON**：`{"mcpServers":{"<服务器名>":{"type":"http","url":"…","headers":{…}}}}`；另支持扩展字段 `platform` | `.ai mcp refresh`（先开「是否启用MCP」） |
+| 知识库 | 知识库 →「知识库（JSON）」 | `{version:1, libraries:[{name,description,platform,content}]}` | `.ai kb refresh` |
+
+共同点：
+
+- **一个分区一份 JSON，互不影响**；顺序 = 插件里的运行时顺序（角色序号 / 技能展示顺序 / 服务器顺序 / 知识库展示顺序）。
+- `platform` 省略或 `[]` = 所有平台。
+- **每个条目卡片都有「启用」开关**：关闭的条目只留在生成器草稿里，**不会写进生成的 JSON**（不产生 `enabled` 字段）；MCP 同理，关闭 = 直接从 `mcpServers` 里移除。
+- **直接导入文件**：
+  - 技能：标准 `SKILL.md`（`---` frontmatter + 正文，这是其他 agent 通用的技能文件格式），一个文件一个技能；
+  - 知识库：`.md` / `.txt`，库名取第一个 `# 标题`，没有标题时用文件名；描述取正文首段；
+  - 角色：`.md` / `.txt`，角色名取文件名，整份文本即设定（不解析 frontmatter）；
+  - MCP：`.json`，**要求标准 `mcpServers` 结构**（与 Claude Desktop / Cursor 的 `.mcp.json` 一致）；stdio（`command`）与 SSE 会明确警告并跳过。
+- 也支持把已有 JSON 粘进「导入…」继续改；导入会**替换**当前页签内容，校验不通过时不动任何东西。
+- 「恢复默认」= 与插件出厂默认一致（由 `tools/sync-default-data.mjs` 从插件源码生成，插件改默认值时重跑）。
+- MCP 输出是**标准 MCP JSON**：顶层 `mcpServers` 对象，键 = 服务器名，字段用 `type` / `url` / `headers`；`token` 只是输入简写，导出时合并成 `Authorization: Bearer …`，不会输出非标准字段；`platform` 是 aiplugin4 的扩展字段（标准客户端会忽略未知字段）。启用开关关闭的服务器直接不出现。
+- 只支持 Streamable HTTP 的 MCP。
+- 生成器的「启用」是**条目级**开关，只影响该条目是否出现在生成的 JSON 里；「是否启用MCP / 启用知识库记忆 / 会话回收」这类**全局开关**仍由插件配置页单独设置，不写进 JSON。
+- 插件侧这四项是**新的 JSON 键名**，旧的多框配置项不再读取、也不会自动迁移；升级后按生成器重新生成一份粘贴即可。
+
+纯逻辑在 `js/domains/*.js`，Node 自检：`node tests/domains-run.mjs`；浏览器交互自检：`tests/domain-e2e-check.html`。
 
 ### 关于 API Key
 
@@ -126,21 +157,37 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 插件侧已同步改造（v5 单框 `模型配置` 取代 `api连接` + `模型规则`）。
 **要装到海豹，需要插件仓库的 `dist/aiplugin4.js` 构建产物 —— 而不仅是拉源码。**
 
+角色 / 技能 / MCP / 知识库四个页签对应插件侧的**新 JSON 配置键**（`角色设定（JSON）`、`技能配置（JSON）`、`MCP服务器配置（JSON）`、`知识库（JSON）`），
+格式版本为 `1`。旧的多框配置项不再读取、也不自动迁移；升级后请用这四个页签重新生成并粘贴。
+
 ## 文件结构
 
 ```
 index.html            页面结构
 css/styles.css        样式
+docs/ui-standard.md   页签 / 卡片动作 / 工具栏 / 导入对话框 / 编辑侧栏的统一标准
+js/ui.js             通用 UI 元件（toast / 复制 / 下载 / 文件选择 / 导入对话框 / 编辑侧栏 / 卡片动作）
+js/tabs.js            统一页签切换（6 个分区）
 js/templates.js       供应商模板（对应插件 PROVIDER_MAP）
 js/classify.js        模型类型分类（与插件 catalog.ts 同源，是其超集）
 js/v5.js              v5 配置的构建 / 校验 / 序列化
 js/fetch-models.js    模型列表拉取（含 CORS 降级 + 供应商自报能力位解析）
-js/app.js             交互逻辑
+js/app.js             模型分区交互逻辑
 js/web.js             联网配置的构建 / 校验 / 序列化（对应插件 src/web/schema.ts）
 js/web-app.js         联网分区的交互逻辑
-tests/run.mjs         逻辑测试（250 项）
-tests/web-check.mjs 联网分区逻辑自检
-tests/dom-test.html   浏览器交互测试（186 项）
+js/domain-app.js      角色 / 技能 / MCP / 知识库的通用交互层
+js/domains/common.js  四个内容分区的共用纯逻辑（JSON / 校验 / SKILL.md frontmatter）
+js/domains/roles.js   角色设定：校验 / 构建 / 导入 / 文件解析
+js/domains/skills.js  技能：校验 / 构建 / 导入 / SKILL.md 解析
+js/domains/mcp.js     MCP：标准 mcpServers JSON 的校验 / 构建 / 导入 / 遮蔽
+js/domains/kb.js     知识库：校验 / 构建 / 导入 / Markdown 解析
+js/domains/default-data.js  出厂默认（由 tools/sync-default-data.mjs 生成）
+tests/run.mjs         模型 / 联网逻辑测试（252 项）
+tests/domains-run.mjs 四个内容分区逻辑测试（101 项）
+tests/web-check.mjs  联网分区逻辑自检（28 项）
+tests/dom-test.html   模型 / 联网浏览器交互测试（207 项）
+tests/domain-e2e-check.html 四个内容分区浏览器交互测试（42 项）
+tests/web-e2e-check.html 联网分区统一编辑/启用/导入交互测试（12 项）
 tests/close-check.html 面板关闭路径定点验证
 tests/purpose-check.html 用途绑定卡片 + 取用顺序角标检查（25 项）
 tests/vision-e2e-check.html 视觉模型端到端检查（桩 /models → 卡片标注 → 配置 kind）
@@ -191,6 +238,11 @@ tests/cors-probe.html CORS 实测工具
 ```
 
 > 换到有响应头控制的托管（Cloudflare Pages 等）可以直接设 `no-store`，就不需要这段了。
+## 开发约定：UI 统一元素
+
+新增页签或改现有页签时，卡片动作（↑ ↓ 编辑 删除）、工具栏（复制全部 / 下载 .json / 导入… / 导入文件… / 恢复默认 / 清空）、导入对话框、编辑侧栏、文件导入行为必须按
+[`docs/ui-standard.md`](docs/ui-standard.md) 实现；通用实现集中在 `js/ui.js` 与 `js/tabs.js`，不要各写一套。
+
 ## 视觉规范
 
 | 项 | 约定 |
@@ -212,10 +264,21 @@ tests/cors-probe.html CORS 实测工具
 ## 测试
 
 ```bash
-node tests/run.mjs        # 逻辑：250 项
+npm test                  # 模型 / 联网 + 四个内容分区的全部 Node 逻辑测试
+# 或分开跑：
+node tests/run.mjs        # 模型 / 联网逻辑
+node tests/domains-run.mjs # 角色 / 技能 / MCP / 知识库逻辑
 # 浏览器：起服务后打开
-#   tests/dom-test.html   交互：164 项
-#   tests/style-check.html 排版与动效：27 项
+#   tests/dom-test.html          模型 / 联网交互
+#   tests/domain-e2e-check.html  四个内容分区交互
+#   tests/web-e2e-check.html     联网分区统一编辑/导入交互
+#   tests/style-check.html       排版与动效
+```
+
+默认值同步（改插件出厂默认后）：
+
+```bash
+node tools/sync-default-data.mjs   # 需要同级目录有 aiplugin4（或设置 AIPLUGIN4_REPO）
 ```
 
 ## 免责

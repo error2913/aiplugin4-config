@@ -1,7 +1,7 @@
 // 联网配置生成器（Web 分区）纯逻辑自检：node tests/web-check.mjs
 // 只验证 web.js 的构建 / 校验 / 导入，不涉及 DOM。
 import {
-    WEB_DEFAULTS, WEB_PRESETS, makeProvider, supportsFetch,
+    WEB_PRESETS, makeProvider, supportsFetch,
     validateWeb, buildWeb, serializeWeb, maskWebKeys, parseWebImport,
 } from '../js/web.js';
 
@@ -33,16 +33,25 @@ const sx = makeProvider('searxng', 'w2');
 sx.id = 'searxng';
 const providers = [ds, sx];
 
-const v = validateWeb(providers, { ...WEB_DEFAULTS });
+const v = validateWeb(providers);
 check('DeepSeek + SearXNG 无阻断问题', v.problems.length === 0, JSON.stringify(v.problems));
 check('填了 Key 时无 warning', v.warnings.length === 0, JSON.stringify(v.warnings));
 
-const cfg = buildWeb(providers, WEB_DEFAULTS);
+const cfg = buildWeb(providers);
 check('version = 1', cfg.version === 1);
 check('routes.search 按 provider 顺序', JSON.stringify(cfg.routes.search) === JSON.stringify(['deepseek', 'searxng']), JSON.stringify(cfg.routes));
 check('routes.fetch 只含支持抓取的方言', JSON.stringify(cfg.routes.fetch) === JSON.stringify(['deepseek']), JSON.stringify(cfg.routes));
 check('非 generic 不写 search/fetch 描述', cfg.providers[0].search === undefined && cfg.providers[1].fetch === undefined);
 check('SearXNG 默认地址写入', cfg.providers[1].baseURL === 'https://searxng.fishwhite.top');
+
+const disabledDs = { ...ds, enabled: false };
+const cfgDisabled = buildWeb([disabledDs, sx]);
+check('停用 provider 从输出移除', cfgDisabled.providers.length === 1 && cfgDisabled.providers[0].id === 'searxng',
+    JSON.stringify(cfgDisabled.providers.map(p => p.id)));
+check('联网输出不含 enabled 键', !JSON.stringify(cfgDisabled).includes('"enabled"'));
+const noKeyDisabled = { ...makeProvider('deepseek', 'w4x'), id: 'deepseek-off', apiKey: '', enabled: false };
+check('停用 provider 不参与校验', validateWeb([noKeyDisabled, sx]).problems.length === 0,
+    JSON.stringify(validateWeb([noKeyDisabled, sx]).problems));
 
 const masked = maskWebKeys(cfg);
 check('遮蔽 Key 不修改原对象', masked.providers[0].apiKey === 'sk-xxxx' && cfg.providers[0].apiKey === 'sk-test');
@@ -50,31 +59,30 @@ check('遮蔽 Key 不修改原对象', masked.providers[0].apiKey === 'sk-xxxx' 
 const g = makeProvider('generic', 'w3');
 g.id = 'my-search';
 g.baseURL = 'https://api.example.com';
-check('generic 默认描述可解析', validateWeb([g], WEB_DEFAULTS).problems.length === 0, JSON.stringify(validateWeb([g], WEB_DEFAULTS).problems));
-const gCfg = buildWeb([g], WEB_DEFAULTS);
+check('generic 默认描述可解析', validateWeb([g]).problems.length === 0, JSON.stringify(validateWeb([g]).problems));
+const gCfg = buildWeb([g]);
 check('generic 写出 search/fetch 描述', !!gCfg.providers[0].search && !!gCfg.providers[0].fetch);
 
 g.searchJson = '{ broken';
-check('generic 坏 JSON → problem', validateWeb([g], WEB_DEFAULTS).problems.length > 0);
+check('generic 坏 JSON → problem', validateWeb([g]).problems.length > 0);
 
 const noKey = makeProvider('deepseek', 'w4');
 noKey.id = 'deepseek-2';
-const v2 = validateWeb([noKey], WEB_DEFAULTS);
+const v2 = validateWeb([noKey]);
 check('DeepSeek 缺 Key → warning 而非 problem', v2.problems.length === 0 && v2.warnings.length === 1, JSON.stringify(v2));
 
 const imported = parseWebImport(JSON.stringify({ providers: [{ dialect: 'deepseek', apiKey: 'k' }] }));
-check('导入最小配置（缺 id/baseURL/defaults）', imported.providers.length === 1 && imported.providers[0].id === 'deepseek');
-check('导入默认项归一',
-    imported.defaults.count === 10 && imported.defaults.detail === 'summary'
-    && imported.defaults.maxContentChars === 5000,
-    JSON.stringify(imported.defaults));
+check('导入最小配置（缺 id/baseURL）', imported.providers.length === 1 && imported.providers[0].id === 'deepseek');
+check('导入不再产生 defaults 字段', !('defaults' in imported));
+check('构建结果不含 defaults（默认项已移到插件配置项）', !('defaults' in cfg), JSON.stringify(Object.keys(cfg)));
 
 let threw = false;
 try { parseWebImport('{ not json'); } catch { threw = true; }
 check('非法 JSON 导入抛错', threw);
 
-const cfgCompact = buildWeb([ds, sx], WEB_DEFAULTS);
+const cfgCompact = buildWeb([ds, sx]);
 check('默认紧凑单行，格式化才多行', serializeWeb(cfgCompact).indexOf('\n') === -1 && serializeWeb(cfgCompact, true).indexOf('\n') !== -1);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+

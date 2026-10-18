@@ -6,16 +6,8 @@
 
 export const WEB_VERSION = 1;
 
-/** 全局默认项（插件侧缺省值一致） */
-export const WEB_DEFAULTS = Object.freeze({
-    count: 10,
-    detail: 'summary',
-    timeout: 20,
-    maxContentChars: 5000,
-    fallback: true,
-});
-
-export const WEB_DETAILS = ['snippet', 'summary', 'content'];
+// 说明：返回条数 / 详细程度 / 超时 / 正文截断 / 失败回退这些“默认项”不再写进联网 JSON，
+// 它们是插件「联网」页的独立配置项（见 aiplugin4 docs/12-配置JSON化方案.md）。
 
 /**
  * 内置方言预设。baseURL 是**缺省值**：插件侧同样内置，配置里可省略；
@@ -161,21 +153,6 @@ export function makeProvider(dialect, uid) {
     };
 }
 
-/** 归一化默认项：非法值退回缺省（生成器不因一个空输入就产出坏配置） */
-export function normalizeDefaults(d) {
-    const src = d && typeof d === 'object' ? d : {};
-    const count = Number(src.count);
-    const timeout = Number(src.timeout);
-    const maxContentChars = Number(src.maxContentChars);
-    return {
-        count: Number.isFinite(count) && count >= 1 && count <= 50 ? Math.floor(count) : WEB_DEFAULTS.count,
-        detail: WEB_DETAILS.includes(src.detail) ? src.detail : WEB_DEFAULTS.detail,
-        timeout: Number.isFinite(timeout) && timeout > 0 ? timeout : WEB_DEFAULTS.timeout,
-        maxContentChars: Number.isFinite(maxContentChars) && maxContentChars > 0 ? Math.floor(maxContentChars) : WEB_DEFAULTS.maxContentChars,
-        fallback: src.fallback !== false,
-    };
-}
-
 function parseJson(text) {
     if (typeof text !== 'string' || !text.trim()) return { ok: true, value: null };
     try {
@@ -197,18 +174,21 @@ export function supportsFetch(p) {
  * 校验生成器状态。返回 { problems, warnings }：
  *   problems 阻止复制（结构性错误）；warnings 只提示（如 DeepSeek 未填 Key）。
  */
-export function validateWeb(providers, defaults) {
+export function validateWeb(providers) {
     const problems = [];
     const warnings = [];
     const push = (arr, path, msg) => arr.push({ path, msg });
 
-    if (!Array.isArray(providers) || providers.length === 0) {
-        push(problems, '$.providers', '至少需要一个 provider（点「+ 添加 provider」）');
+    const list = Array.isArray(providers) ? providers : [];
+    // 停用的 provider 不参与校验：它的字段错误不应阻止复制（生成配置里会直接移除）
+    if (list.filter(p => p && p.enabled !== false).length === 0) {
+        push(problems, '$.providers', '至少需要一个启用的 provider（点「+ 添加 provider」）');
         return { problems, warnings };
     }
 
     const ids = new Set();
-    providers.forEach((p, i) => {
+    list.forEach((p, i) => {
+        if (p.enabled === false) return;
         const pp = `$.providers[${i}]`;
         if (!WEB_PRESETS[p.dialect]) {
             push(problems, `${pp}.dialect`, `未知方言 ${JSON.stringify(p.dialect)}（可选：${WEB_DIALECTS.join(' / ')}）`);
@@ -253,36 +233,18 @@ export function validateWeb(providers, defaults) {
         }
     });
 
-    const d = defaults && typeof defaults === 'object' ? defaults : {};
-    if (d.count !== undefined && d.count !== '') {
-        const v = Number(d.count);
-        if (!Number.isFinite(v) || v < 1 || v > 50) push(problems, '$.defaults.count', 'count 需在 1~50 之间');
-    }
-    if (d.timeout !== undefined && d.timeout !== '') {
-        const v = Number(d.timeout);
-        if (!Number.isFinite(v) || v <= 0) push(problems, '$.defaults.timeout', 'timeout 需为正数（秒）');
-    }
-    if (d.maxContentChars !== undefined && d.maxContentChars !== '') {
-        const v = Number(d.maxContentChars);
-        if (!Number.isFinite(v) || v <= 0) push(problems, '$.defaults.maxContentChars', 'maxContentChars 需为正数');
-    }
-    if (d.detail !== undefined && !WEB_DETAILS.includes(d.detail)) {
-        push(problems, '$.defaults.detail', `detail 只能是 ${WEB_DETAILS.join(' / ')}`);
-    }
-
     return { problems, warnings };
 }
 
 /** 构建最终配置对象（不含遮蔽）。只输出与缺省不同的字段，尽量小。 */
-export function buildWeb(providers, defaults) {
-    const d = normalizeDefaults(defaults);
-    const providersOut = providers.map(p => {
+export function buildWeb(providers) {
+    const active = (providers || []).filter(p => p.enabled !== false);
+    const providersOut = active.map(p => {
         const o = { id: p.id, dialect: p.dialect };
         const base = String(p.baseURL || '').trim();
         if (base) o.baseURL = base;
         const key = String(p.apiKey || '').trim();
         if (key) o.apiKey = key;
-        if (p.enabled === false) o.enabled = false;
         const timeout = Number(p.timeout);
         if (p.timeout !== '' && Number.isFinite(timeout) && timeout > 0) o.timeout = timeout;
         const headers = parseJson(p.headers);
@@ -298,9 +260,9 @@ export function buildWeb(providers, defaults) {
         return o;
     });
 
-    const cfg = { version: WEB_VERSION, defaults: d, providers: providersOut };
+    const cfg = { version: WEB_VERSION, providers: providersOut };
     const searchIds = providersOut.map(p => p.id);
-    const fetchIds = providers.filter(p => supportsFetch(p)).map(p => p.id);
+    const fetchIds = active.filter(p => supportsFetch(p)).map(p => p.id);
     if (searchIds.length) cfg.routes = { search: searchIds };
     if (fetchIds.length) cfg.routes = { ...(cfg.routes || {}), fetch: fetchIds };
     return cfg;
@@ -323,7 +285,7 @@ export function maskWebKeys(cfg) {
 
 /**
  * 导入：把「联网配置」文本还原成生成器状态。
- * 结构不合法抛 Error；其余尽量宽松（缺 id 自动补、缺默认项用缺省）。
+ * 结构不合法抛 Error；其余尽量宽松（缺 id 自动补）。defaults 字段已废弃，导入时忽略。
  */
 export function parseWebImport(text) {
     let raw;
@@ -369,8 +331,6 @@ export function parseWebImport(text) {
         seen.add(p.id);
     }
 
-    return {
-        providers,
-        defaults: normalizeDefaults(raw.defaults || {}),
-    };
+    // 旧配置里可能还带 defaults；生成器不再处理，插件侧已改成独立配置项。
+    return { providers };
 }

@@ -1,11 +1,15 @@
 // 联网搜索配置分区：provider 卡片 + 内联编辑 + 输出「联网配置」JSON。
 // 纯逻辑在 web.js（可单测），本文件只做 DOM 与交互。
 import {
-    WEB_DEFAULTS, WEB_DETAILS, WEB_DIALECTS, WEB_PRESETS,
+    WEB_DIALECTS, WEB_PRESETS,
     DEFAULT_GENERIC_SEARCH, DEFAULT_GENERIC_FETCH,
-    presetOf, makeProvider, normalizeDefaults, supportsFetch,
+    presetOf, makeProvider, supportsFetch,
     validateWeb, buildWeb, serializeWeb, maskWebKeys, parseWebImport,
 } from './web.js';
+import { initTabs, registerView } from './tabs.js';
+import {
+    apiKeyInput, cardActions, copyText, openImportDialog, openSideEditor, pickFiles, readFileText,
+} from './ui.js';
 
 const STORAGE_KEY = 'aiplugin4-config-web-draft';
 
@@ -16,19 +20,13 @@ const nextUid = () => `w${++uidSeq}-${Math.random().toString(36).slice(2, 7)}`;
 
 let state = {
     providers: [],
-    defaults: { ...WEB_DEFAULTS },
 };
-/** 当前展开编辑的 provider uid（同一时间只展开一个） */
-let editingUid = null;
 let saveTimer = null;
 
 function defaultState() {
     const deepseek = makeProvider('deepseek', nextUid());
     const searxng = makeProvider('searxng', nextUid());
-    return {
-        providers: [deepseek, searxng],
-        defaults: { ...WEB_DEFAULTS },
-    };
+    return { providers: [deepseek, searxng] };
 }
 
 // ---------------------------------------------------------------- 持久化
@@ -56,10 +54,7 @@ function loadState() {
         if (!raw) return null;
         const d = JSON.parse(raw);
         if (!d || !Array.isArray(d.providers) || d.providers.length === 0) return null;
-        return {
-            providers: d.providers.map(normalizeStored),
-            defaults: normalizeDefaults(d.defaults || {}),
-        };
+        return { providers: d.providers.map(normalizeStored) };
     } catch {
         return null;
     }
@@ -71,7 +66,6 @@ function save() {
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify({
                 providers: state.providers,
-                defaults: state.defaults,
             }));
         } catch (e) {
             console.warn('联网配置草稿保存失败（浏览器存储不可用或已满）：', e);
@@ -199,7 +193,7 @@ function moveProvider(index, delta) {
 
 function providerCard(p, index) {
     const preset = presetOf(p.dialect);
-    const card = el('div', 'pcard web-pcard' + (editingUid === p.uid ? ' editing' : ''));
+    const card = el('div', 'pcard web-pcard');
 
     const head = el('div', 'pcard-head');
     const titleWrap = el('span', 'web-title');
@@ -230,72 +224,90 @@ function providerCard(p, index) {
     if (supportsFetch(p)) meta.appendChild(Object.assign(el('span', 'web-tag on'), { textContent: '抓取' }));
     card.appendChild(meta);
 
-    const actions = el('div', 'pcard-actions');
-    actions.appendChild(btn(editingUid === p.uid ? '收起' : '编辑', () => {
-        editingUid = editingUid === p.uid ? null : p.uid;
-        renderProviders();
+    card.appendChild(cardActions({
+        canUp: index > 0,
+        canDown: index < state.providers.length - 1,
+        onUp: () => moveProvider(index, -1),
+        onDown: () => moveProvider(index, 1),
+        onEdit: () => openWebEditor(index),
+        onDelete: () => {
+            state.providers.splice(index, 1);
+            save();
+            renderProviders();
+            renderOutput();
+        },
     }));
-    const up = btn('↑', () => moveProvider(index, -1), 'btn-move');
-    up.disabled = index === 0;
-    const down = btn('↓', () => moveProvider(index, 1), 'btn-move');
-    down.disabled = index === state.providers.length - 1;
-    actions.appendChild(up);
-    actions.appendChild(down);
-    actions.appendChild(btn('删除', () => {
-        state.providers.splice(index, 1);
-        if (editingUid === p.uid) editingUid = null;
-        save();
-        renderProviders();
-        renderOutput();
-    }, 'btn-danger'));
-    card.appendChild(actions);
 
-    if (editingUid === p.uid) card.appendChild(providerEdit(p));
     return card;
 }
 
-function providerEdit(p) {
+/** 联网 Provider 的编辑统一走右侧面板（与模型 / 内容分区一致） */
+function openWebEditor(index) {
+    const original = JSON.parse(JSON.stringify(state.providers[index]));
+    const body = el('div', 'side-editor');
+    const render = () => {
+        body.innerHTML = '';
+        body.appendChild(providerEdit(
+            state.providers[index],
+            () => { save(); renderOutput(); },
+            () => { save(); render(); renderOutput(); },
+        ));
+    };
+    render();
+    openSideEditor({
+        title: '编辑联网 Provider',
+        body,
+        onSave: () => { save(); renderAll(); },
+        onCancel: () => {
+            state.providers[index] = original;
+            save();
+            renderAll();
+        },
+    });
+}
+
+/**
+ * 编辑表单：只负责改字段，不负责保存时机。
+ * @param {object} p Provider（直接改 state 里的对象；取消时由 openWebEditor 回滚）
+ * @param {() => void} onChange 普通字段变化（刷新预览）
+ * @param {() => void} onRestructure 接入方式变化（需要重建表单）
+ */
+function providerEdit(p, onChange, onRestructure) {
     const preset = presetOf(p.dialect);
     const box = el('div', 'web-edit');
 
     box.appendChild(field('接入方式',
         selectInput(p.dialect, WEB_DIALECTS.map(d => ({ value: d, label: WEB_PRESETS[d].label })), v => {
             applyDialect(p, v);
-            save();
-            renderProviders();
-            renderOutput();
+            onRestructure();
         }),
         preset.hint));
 
     box.appendChild(field('baseURL',
         textInput(p.baseURL, v => {
             p.baseURL = v;
-            save();
-            renderOutput();
+            onChange();
         }, 'https://…'),
         '留空用方言内置地址（generic 必填）'));
 
     box.appendChild(field('API Key',
-        textInput(p.apiKey, v => {
+        apiKeyInput(p.apiKey, v => {
             p.apiKey = v;
-            save();
-            renderOutput();
-        }, preset.needKey ? 'sk-…' : '该方言不需要 Key'),
-        '只保存在本机浏览器 localStorage，不会上传'));
+            onChange();
+        }, { placeholder: preset.needKey ? 'sk-…' : '该方言不需要 Key' }),
+        '明文存入生成的配置；只保存在本机浏览器 localStorage，不会上传。分享时请用「遮蔽」'));
 
     if (p.dialect === 'generic') {
         box.appendChild(field('search 描述（JSON）',
             textarea(p.searchJson, v => {
                 p.searchJson = v;
-                save();
-                renderOutput();
+                onChange();
             }, 8, '{\n  "method": "POST",\n  "path": "/v1/search",\n  "body": { "q": "{query}", "limit": "{count}" },\n  "results_path": "data.items",\n  "fields": { "title": "name", "url": "link", "snippet": "description" }\n}'),
             '占位符：{query} {count} {need_content} {page} {offset} {site} {time_range} {apiKey} {baseURL}'));
         box.appendChild(field('fetch 描述（JSON）',
             textarea(p.fetchJson, v => {
                 p.fetchJson = v;
-                save();
-                renderOutput();
+                onChange();
             }, 6, '{\n  "method": "GET",\n  "path": "/reader?url={url}",\n  "response_type": "json",\n  "title_path": "title",\n  "content_path": "content"\n}'),
             'response_type：json | text；留空 = 该 provider 不参与抓取'));
     }
@@ -306,15 +318,13 @@ function providerEdit(p) {
     advBody.appendChild(field('超时（秒）',
         numberInput(p.timeout, v => {
             p.timeout = v;
-            save();
-            renderOutput();
-        }, '留空用默认项', 1),
-        '覆盖「默认项」里的 timeout'));
+            onChange();
+        }, '留空用插件配置项', 1),
+        '覆盖「联网搜索超时」配置项'));
     advBody.appendChild(field('额外 headers（JSON）',
         textarea(p.headers, v => {
             p.headers = v;
-            save();
-            renderOutput();
+            onChange();
         }, 3, '{ "X-Trace-Id": "1" }'),
         '必须是 JSON 对象；留空不写'));
     adv.appendChild(advBody);
@@ -336,64 +346,11 @@ function renderProviders() {
         const p = makeProvider('deepseek', nextUid());
         p.id = uniqueId('deepseek', p);
         state.providers.push(p);
-        editingUid = p.uid;
         save();
         renderAll();
+        openWebEditor(state.providers.length - 1);
     });
     wrap.appendChild(add);
-}
-
-// ---------------------------------------------------------------- 默认项
-
-function renderDefaults() {
-    const wrap = $('webDefaults');
-    if (!wrap) return;
-    wrap.innerHTML = '';
-
-    wrap.appendChild(field('返回条数 count',
-        numberInput(state.defaults.count, v => {
-            state.defaults.count = v === '' ? '' : Number(v);
-            save();
-            renderOutput();
-        }, '10', 1, 50),
-        '1~50，工具未指定时使用'));
-
-    wrap.appendChild(field('detail 详细程度',
-        selectInput(state.defaults.detail, WEB_DETAILS.map(d => ({ value: d, label: d })), v => {
-            state.defaults.detail = v;
-            save();
-            renderOutput();
-        }),
-        'snippet 短摘要 / summary 长摘要 / content 正文'));
-
-    wrap.appendChild(field('超时 timeout（秒）',
-        numberInput(state.defaults.timeout, v => {
-            state.defaults.timeout = v === '' ? '' : Number(v);
-            save();
-            renderOutput();
-        }, '20', 1),
-        '单次请求超时'));
-
-    wrap.appendChild(field('正文截断 maxContentChars',
-        numberInput(state.defaults.maxContentChars, v => {
-            state.defaults.maxContentChars = v === '' ? '' : Number(v);
-            save();
-            renderOutput();
-        }, '5000', 100),
-        'detail=content 时单条正文的最大字符数'));
-
-    const fb = el('label', 'toggle');
-    const fbc = el('input');
-    fbc.type = 'checkbox';
-    fbc.checked = state.defaults.fallback !== false;
-    fbc.addEventListener('change', () => {
-        state.defaults.fallback = fbc.checked;
-        save();
-        renderOutput();
-    });
-    fb.appendChild(fbc);
-    fb.appendChild(document.createTextNode('失败自动换下一个 provider'));
-    wrap.appendChild(field('fallback', fb, '关闭后只试第一个，排障用'));
 }
 
 // ---------------------------------------------------------------- 输出
@@ -402,8 +359,8 @@ function renderOutput() {
     if (!$('webPreview')) return;
     const masked = $('webMaskKey').checked;
     const pretty = $('webPrettyJson').checked;
-    const { problems, warnings } = validateWeb(state.providers, state.defaults);
-    let cfg = buildWeb(state.providers, state.defaults);
+    const { problems, warnings } = validateWeb(state.providers);
+    let cfg = buildWeb(state.providers);
     if (masked) cfg = maskWebKeys(cfg);
     $('webPreview').textContent = serializeWeb(cfg, pretty);
 
@@ -444,78 +401,39 @@ function issueList(issues) {
 
 function renderAll() {
     renderProviders();
-    renderDefaults();
     renderOutput();
 }
 
 // ---------------------------------------------------------------- 导入 / 导出
 
-function openImport(open) {
-    $('webImportBox').hidden = !open;
-    $('webImportMsg').hidden = true;
-    if (open) $('webImportText').focus();
-}
-
-function doImport() {
-    const msg = $('webImportMsg');
+/** 统一导入对话框的 parse 适配：parseWebImport 用抛错表达失败，这里转成 issues */
+function parseWebForDialog(text) {
     try {
-        const imported = parseWebImport($('webImportText').value);
-        const { problems } = validateWeb(imported.providers, imported.defaults);
-        if (problems.length > 0) {
-            msg.hidden = false;
-            msg.textContent = problems.map(p => `${p.path} ${p.msg}`).join('\n');
-            return;
-        }
-        state.providers = imported.providers;
-        state.defaults = imported.defaults;
-        editingUid = null;
-        save();
-        renderAll();
-        openImport(false);
-        toast('已导入联网配置', 'ok');
+        const imported = parseWebImport(text);
+        const { problems } = validateWeb(imported.providers);
+        if (problems.length > 0) return { ok: false, issues: problems };
+        return { ok: true, value: imported };
     } catch (e) {
-        msg.hidden = false;
-        msg.textContent = e instanceof Error ? e.message : String(e);
+        return { ok: false, issues: [{ path: '$', msg: e instanceof Error ? e.message : String(e) }] };
     }
 }
 
-async function copyText(text) {
-    try {
-        await navigator.clipboard.writeText(text);
-        return true;
-    } catch { /* 走下面的兜底 */ }
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    let ok = false;
-    try { ok = document.execCommand('copy'); } catch { ok = false; }
-    document.body.removeChild(ta);
-    return ok;
+function applyWebImport(imported) {
+    state.providers = imported.providers;
+    save();
+    renderAll();
+    toast('已导入联网配置', 'ok');
 }
 
-// ---------------------------------------------------------------- 分区切换
-
-function setView(view) {
-    const isWeb = view === 'web';
-    const model = $('modelLayout');
-    const web = $('webLayout');
-    if (!model || !web) return;
-    model.hidden = isWeb;
-    web.hidden = !isWeb;
-    const tm = $('tabModel');
-    const tw = $('tabWeb');
-    if (tm) {
-        tm.classList.toggle('active', !isWeb);
-        tm.setAttribute('aria-selected', String(!isWeb));
-    }
-    if (tw) {
-        tw.classList.toggle('active', isWeb);
-        tw.setAttribute('aria-selected', String(isWeb));
-    }
-    if (isWeb) renderAll();
+function openImport() {
+    openImportDialog({
+        title: '导入联网配置',
+        hint: '粘贴一份已有的「联网配置」。导入会替换当前内容；校验不通过时不会改动任何东西。',
+        placeholder: '{"providers":[{"dialect":"deepseek","apiKey":"sk-…"}]}',
+        rows: 10,
+        parse: parseWebForDialog,
+        onSuccess: (res) => applyWebImport(res.value),
+    });
 }
 
 // ---------------------------------------------------------------- 启动
@@ -523,7 +441,6 @@ function setView(view) {
 function init() {
     const loaded = loadState();
     state = loaded || defaultState();
-    editingUid = null;
 
     $('webMaskKey').addEventListener('change', renderOutput);
     $('webPrettyJson').addEventListener('change', renderOutput);
@@ -542,13 +459,23 @@ function init() {
         setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     });
 
-    $('webImportBtn').addEventListener('click', () => openImport($('webImportBox').hidden));
-    $('webImportCancel').addEventListener('click', () => openImport(false));
-    $('webImportConfirm').addEventListener('click', doImport);
+    $('webImportBtn').addEventListener('click', openImport);
+    $('webFileImportBtn').addEventListener('click', () => pickFiles({
+        accept: '.json',
+        onFiles: (files) => {
+            readFileText(files[0]).then((text) => {
+                const result = parseWebForDialog(text);
+                if (!result.ok) {
+                    toast(`导入失败：${result.issues?.[0]?.path || '$'} ${result.issues?.[0]?.msg || ''}`, 'err');
+                    return;
+                }
+                applyWebImport(result.value);
+            }).catch((e) => toast(`读取失败：${e instanceof Error ? e.message : String(e)}`, 'err'));
+        },
+    }));
 
     $('webResetBtn').addEventListener('click', () => {
         state = defaultState();
-        editingUid = null;
         save();
         renderAll();
         toast('已恢复 DeepSeek + SearXNG 示例', 'ok');
@@ -556,18 +483,15 @@ function init() {
 
     $('webClearBtn').addEventListener('click', () => {
         state.providers = [];
-        state.defaults = { ...WEB_DEFAULTS };
-        editingUid = null;
         save();
         renderAll();
     });
 
-    $('tabModel').addEventListener('click', () => setView('model'));
-    $('tabWeb').addEventListener('click', () => setView('web'));
+    registerView('model', $('modelLayout'));
+    registerView('web', $('webLayout'), renderAll);
 
-    const params = new URLSearchParams(location.search);
-    const wantWeb = params.get('tab') === 'web' || location.hash === '#web';
-    setView(wantWeb ? 'web' : 'model');
+    // 页签切换统一由 tabs.js 负责（四个内容分区在 domain-app.js 里注册）
+    initTabs();
 }
 
 init();

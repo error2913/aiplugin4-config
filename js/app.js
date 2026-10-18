@@ -11,6 +11,7 @@ import {
     uniqueModelId, collectModelIds, isEligibleKind, normalizePurposeList,
 } from './v5.js';
 import { fetchModelList, FetchError, sortModelEntries } from './fetch-models.js';
+import { apiKeyInput, openImportDialog, pickFiles, readFileText } from './ui.js';
 
 const STORAGE_KEY = 'aiplugin4-config-v5-draft';
 
@@ -156,6 +157,27 @@ function renderCards() {
         badge.textContent = cors.text;
         badge.title = cors.title;
         head.appendChild(badge);
+        // 启用开关：只控制是否写进生成配置，不产生 enabled 字段
+        const toggle = el('label', 'toggle');
+        const cb = el('input');
+        cb.type = 'checkbox';
+        cb.checked = p.enabled !== false;
+        cb.title = '启用（关闭 = 从生成的配置里移除）';
+        cb.addEventListener('change', () => {
+            p.enabled = cb.checked;
+            if (!cb.checked) {
+                const ids = new Set((p.models || []).map(m => m.id));
+                for (const key of Object.keys(state.purposes)) {
+                    const kept = normalizePurposeList(state.purposes[key]).filter(id => !ids.has(id));
+                    if (kept.length) state.purposes[key] = kept;
+                    else delete state.purposes[key];
+                }
+            }
+            scheduleSave();
+            renderAll();
+        });
+        toggle.append(cb, document.createTextNode('启用'));
+        head.appendChild(toggle);
         card.appendChild(head);
 
         // 副标题显示识别出的 vendor（或显式覆盖值），让用户看到插件会用什么
@@ -499,23 +521,8 @@ function renderPanel() {
     updateVendorStatus();
     body.appendChild(vWrap);
 
-    // ---- API Key
-    const keyWrap = el('div', 'key-row');
-    const keyIn = document.createElement('input');
-    keyIn.type = 'password';
-    keyIn.value = draft.apiKey;
-    keyIn.placeholder = 'sk-xxxxxxxx';
-    keyIn.autocomplete = 'new-password';
-    keyIn.spellcheck = false;
-    keyIn.oninput = () => { draft.apiKey = keyIn.value; renderOutput(); };
-    const eye = el('button', 'btn btn-sm');
-    eye.type = 'button'; eye.textContent = '显示';
-    eye.onclick = () => {
-        const show = keyIn.type === 'password';
-        keyIn.type = show ? 'text' : 'password';
-        eye.textContent = show ? '隐藏' : '显示';
-    };
-    keyWrap.appendChild(keyIn); keyWrap.appendChild(eye);
+    // ---- API Key（统一用 ui.js 的密钥输入，与联网 / MCP Token 一致）
+    const keyWrap = apiKeyInput(draft.apiKey, (v) => { draft.apiKey = v; renderOutput(); }, { placeholder: 'sk-xxxxxxxx' });
     // 提示要写清两件事：
     //   1. 它进生成的配置是**明文**（v5 既定设计，插件侧也没有环境变量可放）
     //   2. 它**会存在本机浏览器里**（刷新不丢）—— 公用电脑上记得用「清空」擦掉
@@ -1481,40 +1488,18 @@ $('panelBackdrop').onclick = closePanel;
 //      不能静默丢内容
 
 function openImport() {
-    $('importText').value = '';
-    $('importMsg').hidden = true;
-    $('importMsg').textContent = '';
-    $('importWarn').hidden = true;
-    $('importWarn').textContent = '';
-    $('importPanel').hidden = false;
-    $('importBackdrop').hidden = false;
-    $('importText').focus();
+    openImportDialog({
+        title: '导入配置',
+        hint: '粘贴一份 v5 配置（就是「模型配置」里的内容）。导入会替换当前所有连接与用途绑定；校验不通过时不会改动任何东西。',
+        placeholder: '{"version":5,"providers":[…],"purposes":{…}}',
+        rows: 14,
+        parse: parseImport,
+        onSuccess: applyImportedState,
+    });
 }
 
-function closeImport() {
-    $('importPanel').hidden = true;
-    $('importBackdrop').hidden = true;
-    // 与连接面板同理：清空内容，避免关闭后残留 DOM 被选择器命中
-    $('importText').value = '';
-    $('importMsg').hidden = true;
-    $('importWarn').hidden = true;
-}
-
-function showImportError(issues) {
-    const box = $('importMsg');
-    const lines = issues.slice(0, 8).map(i => `${i.path} ${i.msg}`);
-    if (issues.length > 8) lines.push(`…还有 ${issues.length - 8} 处`);
-    box.textContent = '导入失败，未改动任何内容：\n' + lines.join('\n');
-    box.hidden = false;
-    $('importWarn').hidden = true;
-}
-
-function doImport() {
-    const res = parseImport($('importText').value);
-    if (!res.ok) {
-        showImportError(res.issues);
-        return;
-    }
+/** 把 parseImport 的结果真正落到界面（导入对话框与文件导入共用） */
+function applyImportedState(res) {
     // 先关掉连接编辑面板：它的草稿属于**导入前**的 state。
     // 不关的话 renderOutput() 走 effectiveProviders() 会优先用草稿，
     // 于是预览显示的是"旧连接 + 草稿改动"而不是刚导入的配置 —— 用户看到的是个混合体。
@@ -1537,7 +1522,6 @@ function doImport() {
     };
     scheduleSave();
     renderAll();
-    closeImport();
 
     if (res.warnings.length) {
         // 导入已完成，但要让用户知道哪部分没能进界面
@@ -1558,10 +1542,19 @@ function doImport() {
 }
 
 $('importBtn').onclick = openImport;
-$('importClose').onclick = closeImport;
-$('importCancel').onclick = closeImport;
-$('importBackdrop').onclick = closeImport;
-$('importConfirm').onclick = doImport;
+$('fileImportBtn').onclick = () => pickFiles({
+    accept: '.json',
+    onFiles: (files) => {
+        readFileText(files[0]).then((text) => {
+            const res = parseImport(text);
+            if (!res.ok) {
+                toast(`导入失败：${res.issues?.[0]?.path || '$'} ${res.issues?.[0]?.msg || ''}`, 'err');
+                return;
+            }
+            applyImportedState(res);
+        }).catch((e) => toast(`读取失败：${e instanceof Error ? e.message : String(e)}`, 'err'));
+    },
+});
 
 // ---------------------------------------------------------------- 启动
 

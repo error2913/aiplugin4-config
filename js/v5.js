@@ -187,7 +187,25 @@ export function validateConfig(cfg) {
  * 需要校验完整 JSON（含 version/groups）时用 validateConfig()。
  */
 export function validate(providers, purposes) {
-    return validateConfig({ version: 5, providers, purposes });
+    // 停用的连接不参与校验：它的字段错误/空 Key 不应阻止复制；
+    // 绑定到它模型的用途也会在 build 时被过滤掉。
+    const list = providers || [];
+    const active = list.filter(p => p.enabled !== false);
+    // 只过滤“停用连接里的模型”绑定；手写/导入里指向不存在模型的绑定仍要报错
+    const disabledIds = new Set(collectModelIds(list.filter(p => p.enabled === false)));
+    const filteredPurposes = {};
+    for (const [k, v] of Object.entries(purposes || {})) {
+        if (Array.isArray(v)) {
+            const kept = v.filter(id => !disabledIds.has(id));
+            if (kept.length) filteredPurposes[k] = kept;
+        } else if (typeof v === 'string') {
+            if (v && !disabledIds.has(v)) filteredPurposes[k] = v;
+        } else {
+            // 非法类型原样交给 validateConfig 报错，避免这里静默吞掉
+            filteredPurposes[k] = v;
+        }
+    }
+    return validateConfig({ version: 5, providers: active, purposes: filteredPurposes });
 }
 
 /**
@@ -259,12 +277,14 @@ function defaultGroups(purposes, useBodies, extraGroups) {
  */
 export function build(providers, purposes, useBodies, extraGroups) {
     const out = { version: 5 };
+    // 停用的连接直接从生成配置里移除（不写 enabled 字段），绑定到它模型的用途也一并过滤
+    const active = (providers || []).filter(p => p.enabled !== false);
+    const activeIds = new Set(collectModelIds(active));
 
-    out.providers = (providers || []).map(p => {
+    out.providers = active.map(p => {
         const o = { api: p.api, baseURL: p.baseURL, apiKey: p.apiKey };
         // provider 只在**显式覆盖**时写出；留空 = 插件按 baseURL host 自动识别（方案 2.3.2）
         if (p.provider) o.provider = p.provider;
-        if (p.enabled === false) o.enabled = false;
         if (p.displayName) o.displayName = p.displayName;
         if (p.timeout) o.timeout = p.timeout;
         if (p.request && Object.keys(p.request).length) o.request = p.request;
@@ -286,7 +306,7 @@ export function build(providers, purposes, useBodies, extraGroups) {
     // 只绑一个时也写数组 —— 形状统一，插件侧不必区分两种写法。
     const usedPurposes = {};
     for (const k of PURPOSE_KEYS) {
-        const list = normalizePurposeList(purposes && purposes[k]);
+        const list = normalizePurposeList(purposes && purposes[k]).filter(id => activeIds.has(id));
         if (list.length) usedPurposes[k] = list;
     }
     if (Object.keys(usedPurposes).length) out.purposes = usedPurposes;
