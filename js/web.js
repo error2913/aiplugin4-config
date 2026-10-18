@@ -8,10 +8,10 @@ export const WEB_VERSION = 1;
 
 /** 全局默认项（插件侧缺省值一致） */
 export const WEB_DEFAULTS = Object.freeze({
-    count: 5,
+    count: 10,
     detail: 'summary',
     timeout: 20,
-    maxContentChars: 4000,
+    maxContentChars: 5000,
     fallback: true,
 });
 

@@ -355,7 +355,7 @@ function renderDefaults() {
             state.defaults.count = v === '' ? '' : Number(v);
             save();
             renderOutput();
-        }, '5', 1, 50),
+        }, '10', 1, 50),
         '1~50，工具未指定时使用'));
 
     wrap.appendChild(field('detail 详细程度',
@@ -379,7 +379,7 @@ function renderDefaults() {
             state.defaults.maxContentChars = v === '' ? '' : Number(v);
             save();
             renderOutput();
-        }, '4000', 100),
+        }, '5000', 100),
         'detail=content 时单条正文的最大字符数'));
 
     const fb = el('label', 'toggle');

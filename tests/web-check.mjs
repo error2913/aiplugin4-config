@@ -64,7 +64,10 @@ check('DeepSeek 缺 Key → warning 而非 problem', v2.problems.length === 0 &&
 
 const imported = parseWebImport(JSON.stringify({ providers: [{ dialect: 'deepseek', apiKey: 'k' }] }));
 check('导入最小配置（缺 id/baseURL/defaults）', imported.providers.length === 1 && imported.providers[0].id === 'deepseek');
-check('导入默认项归一', imported.defaults.count === 5 && imported.defaults.detail === 'summary');
+check('导入默认项归一',
+    imported.defaults.count === 10 && imported.defaults.detail === 'summary'
+    && imported.defaults.maxContentChars === 5000,
+    JSON.stringify(imported.defaults));
 
 let threw = false;
 try { parseWebImport('{ not json'); } catch { threw = true; }
