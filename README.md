@@ -1,11 +1,11 @@
 # aiplugin4 配置生成器
 
-给 [aiplugin4](https://github.com/error2913/aiplugin4)（SealDice AI 插件）用的**模型配置可视化生成器**。
+给 [aiplugin4](https://github.com/error2913/aiplugin4)（SealDice AI 插件）用的**模型 / 联网搜索配置可视化生成器**。
 
-点选供应商 → 填 API Key → 选模型 → 复制生成的 JSON 粘进海豹，不用手写配置。
+点选供应商 → 填 API Key → 选模型（或选搜索方言）→ 复制生成的 JSON 粘进海豹，不用手写配置。
 
 > **零依赖纯静态页面**，双击 `index.html` 即可跑（建议用 `node serve.mjs`，见「用法」）。
-> 产出 **v5 JSON 配置**（单框）；插件侧已同步改造 —— 见下方「适配状态」。
+> 产出 **v5 JSON 模型配置**（单框）与**联网配置 JSON**（插件「联网」页）；插件侧见下方「适配状态」。
 
 ## 为什么需要它
 
@@ -63,7 +63,23 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 - **实时预览**：右侧常驻显示生成的 JSON，编辑过程中即时更新
 - **校验 + 路径报错**：`$.providers[1].models[0].kind` 形式指出问题，有问题时禁止复制
 - **遮蔽 API Key**：导出时换成 `sk-xxxx`，方便截图分享
+- **格式化开关**：输出默认紧凑单行，打开后多行缩进（模型 / 联网两个输出窗口都有）
 - **本地草稿**：自动存 localStorage
+
+### 联网搜索分区
+
+顶栏「联网搜索」页签为插件「联网 → 联网配置」生成 JSON（独立于模型配置，两边数据互不影响）：
+
+- **Provider 卡片**：内置 10 家方言 + 自定义（generic），顺序即搜索/抓取尝试顺序（前一个失败自动换下一个）：
+  DeepSeek / SearXNG / Kimi (Moonshot) / Brave Search / Tavily / Serper / 博查 Bocha / 智谱 Web Search / Exa / Firecrawl；
+- 每家只需选方言、填 API Key（SearXNG 不用 Key），默认 `baseURL` 已内置；
+- **generic** 用 JSON 描述任意 HTTP 搜索/抓取接口（请求模板占位符 + 响应取数路径），不用改插件代码；Jina Reader 这类未内置的走它；
+- 右侧实时产出「联网配置」，可复制 / 下载 / 导入；校验不通过时禁止复制；
+- 默认输出**紧凑单行**（省版面、直接可粘贴）；「**格式化**」开关可展开为多行缩进，便于阅读；
+- 字段与插件侧 schema v1 对应（插件侧尚在方案阶段，当前产出用于对齐格式；各家的请求/响应格式见插件仓库 `docs/18-联网搜索与抓取接入方案.md` §6.7）。
+- OpenAI / Anthropic / Gemini / xAI / Qwen 等**模型自带的托管搜索**不是独立 provider，属于模型请求参数，见插件仓库 `docs/18` §6.8（模型页「请求与响应格式」里注入）。
+
+纯逻辑在 `js/web.js`，自检：`node tests/web-check.mjs`。
 
 ### 关于 API Key
 
@@ -120,7 +136,10 @@ js/classify.js        模型类型分类（与插件 catalog.ts 同源，是其�
 js/v5.js              v5 配置的构建 / 校验 / 序列化
 js/fetch-models.js    模型列表拉取（含 CORS 降级 + 供应商自报能力位解析）
 js/app.js             交互逻辑
+js/web.js             联网配置的构建 / 校验 / 序列化（对应插件 src/web/schema.ts）
+js/web-app.js         联网分区的交互逻辑
 tests/run.mjs         逻辑测试（250 项）
+tests/web-check.mjs 联网分区逻辑自检
 tests/dom-test.html   浏览器交互测试（186 项）
 tests/close-check.html 面板关闭路径定点验证
 tests/purpose-check.html 用途绑定卡片 + 取用顺序角标检查（25 项）

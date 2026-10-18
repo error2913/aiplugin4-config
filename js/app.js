@@ -7,7 +7,7 @@ import {
 } from './templates.js';
 import { decideKind } from './classify.js';
 import {
-    validate, build, serialize, maskKeys, parseImport,
+    validate, build, serialize, serializePretty, maskKeys, parseImport,
     uniqueModelId, collectModelIds, isEligibleKind, normalizePurposeList,
 } from './v5.js';
 import { fetchModelList, FetchError, sortModelEntries } from './fetch-models.js';
@@ -1050,11 +1050,16 @@ function currentProblems() {
     return validate(effectiveProviders(), state.purposes);
 }
 
+/** 输出序列化：默认紧凑单行，勾选「格式化」后多行缩进 */
+function serializeOutput(cfg) {
+    return $('prettyJson').checked ? serializePretty(cfg) : serialize(cfg);
+}
+
 function renderOutput() {
     const masked = $('maskKey').checked;
     let cfg = build(effectiveProviders(), state.purposes, state.useBodies, state.extraGroups);
     if (masked) cfg = maskKeys(cfg);
-    $('preview').textContent = serialize(cfg);
+    $('preview').textContent = serializeOutput(cfg);
 
     const problems = currentProblems();
     const box = $('validationBox');
@@ -1412,7 +1417,7 @@ function responseEditor(m, onChange) {
 
 $('copyBtn').onclick = async () => {
     const cfg = build(state.providers, state.purposes, state.useBodies, state.extraGroups);
-    const text = $('maskKey').checked ? serialize(maskKeys(cfg)) : serialize(cfg);
+    const text = serializeOutput($('maskKey').checked ? maskKeys(cfg) : cfg);
     try {
         await navigator.clipboard.writeText(text);
         toast('已复制，粘到 模型 → 模型配置', 'ok');
@@ -1428,7 +1433,7 @@ $('copyBtn').onclick = async () => {
 
 $('downloadBtn').onclick = () => {
     const cfg = build(state.providers, state.purposes, state.useBodies, state.extraGroups);
-    const text = $('maskKey').checked ? serialize(maskKeys(cfg)) : serialize(cfg);
+    const text = serializeOutput($('maskKey').checked ? maskKeys(cfg) : cfg);
     const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1462,6 +1467,7 @@ $('resetBtn').onclick = () => {
 };
 
 $('maskKey').onchange = renderOutput;
+$('prettyJson').onchange = renderOutput;
 $('panelClose').onclick = closePanel;
 $('panelCancel').onclick = closePanel;
 $('panelSave').onclick = savePanel;

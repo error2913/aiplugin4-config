@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>aiplugin4 配置生成器 v5</title>
+<title>aiplugin4 配置生成器</title>
 <script>
 // 把地址栏上的 ?v= 透传到**资源 URL**，让 HTML 与 CSS/JS **一起**绕过缓存。
 //
@@ -31,13 +31,20 @@
       <span class="brand-mark" aria-hidden="true"></span>
       <div>
         <h1>aiplugin4 配置生成器</h1>
-        <p class="brand-sub">可视化填写模型配置，生成可直接粘贴的 JSON</p>
+        <p class="brand-sub">可视化填写模型 / 联网配置，生成可直接粘贴的 JSON</p>
       </div>
     </div>
   </div>
 </header>
 
-<main class="layout">
+<nav class="view-tabs" aria-label="配置分区">
+  <button class="view-tab active" id="tabModel" type="button" role="tab" aria-selected="true">模型配置</button>
+  <button class="view-tab" id="tabWeb" type="button" role="tab" aria-selected="false">
+    联网搜索
+  </button>
+</nav>
+
+<main class="layout" id="modelLayout">
 
   <!-- 左：连接与用途 -->
   <section class="pane">
@@ -58,10 +65,16 @@
   <section class="pane pane-output">
     <div class="pane-head">
       <h2>生成的配置</h2>
-      <label class="toggle" title="导出时把 API Key 换成占位符，便于截图分享">
-        <input type="checkbox" id="maskKey">
-        <span>遮蔽 API Key</span>
-      </label>
+      <div class="toggle-group">
+        <label class="toggle" title="导出时把 API Key 换成占位符，便于截图分享">
+          <input type="checkbox" id="maskKey">
+          <span>遮蔽 API Key</span>
+        </label>
+        <label class="toggle" title="打开后输出多行缩进 JSON（默认紧凑单行，省版面）">
+          <input type="checkbox" id="prettyJson">
+          <span>格式化</span>
+        </label>
+      </div>
     </div>
 
     <div id="validationBox" class="validation" hidden></div>
@@ -92,6 +105,78 @@
     </details>
   </section>
 
+</main>
+
+<!-- 联网搜索分区：provider 卡片 + 默认项 + 「联网配置」输出 -->
+<main class="layout" id="webLayout" hidden>
+  <section class="pane">
+    <div class="pane-head">
+      <h2>联网 Provider</h2>
+      <span class="pane-hint">顺序 = 尝试顺序（前一个失败自动换下一个）</span>
+    </div>
+    <div id="webProviderList" class="card-grid"></div>
+
+    <div class="pane-head pane-head-2">
+      <h2>默认项</h2>
+      <span class="pane-hint">都可省略；生成器会按当前值显式写出</span>
+    </div>
+    <div id="webDefaults" class="web-defaults"></div>
+  </section>
+
+  <section class="pane pane-output">
+    <div class="pane-head">
+      <h2>生成的「联网配置」</h2>
+      <div class="toggle-group">
+        <label class="toggle" title="导出时把 API Key 换成占位符，便于截图分享">
+          <input type="checkbox" id="webMaskKey">
+          <span>遮蔽 API Key</span>
+        </label>
+        <label class="toggle" title="打开后输出多行缩进 JSON（默认紧凑单行，省版面）">
+          <input type="checkbox" id="webPrettyJson">
+          <span>格式化</span>
+        </label>
+      </div>
+    </div>
+
+    <div id="webValidation" class="validation" hidden></div>
+
+    <pre id="webPreview" class="preview"></pre>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="webCopyBtn" type="button">复制全部</button>
+      <button class="btn" id="webDownloadBtn" type="button">下载 .json</button>
+      <button class="btn" id="webImportBtn" type="button">导入…</button>
+      <button class="btn" id="webResetBtn" type="button" title="恢复 DeepSeek + SearXNG 示例">恢复默认</button>
+      <button class="btn" id="webClearBtn" type="button">清空</button>
+    </div>
+
+    <div id="webImportBox" class="web-import" hidden>
+      <div class="field-note">
+        粘贴一份已有的「联网配置」，导入会<strong>替换</strong>当前内容；校验不通过时不会改动任何东西。
+      </div>
+      <textarea id="webImportText" class="json-area" rows="10" spellcheck="false"
+        placeholder='{"providers":[{"dialect":"deepseek","apiKey":"sk-…"}]}'></textarea>
+      <div id="webImportMsg" class="json-err" hidden></div>
+      <div class="actions">
+        <button class="btn btn-primary" id="webImportConfirm" type="button">导入</button>
+        <button class="btn" id="webImportCancel" type="button">取消</button>
+      </div>
+    </div>
+
+    <details class="usage-box">
+      <summary>怎么用？</summary>
+      <ol class="usage">
+        <li>点「+ 添加 provider」或卡片上的「编辑」，选接入方式（DeepSeek / SearXNG / 自定义）。</li>
+        <li>DeepSeek 只需填 API Key；SearXNG 一般不用改地址。</li>
+        <li>自定义（generic）用 JSON 描述请求与取数字段，任何返回 JSON 的搜索接口都能接。</li>
+        <li>点「复制全部」，粘到 SealDice WebUI →「JS插件」→「插件设置」→ aiplugin4 →「联网」→ <strong>联网配置</strong>。</li>
+        <li>重载 JS 生效。已有配置可用「导入…」接着改。</li>
+      </ol>
+      <p class="hint">
+        本工具只生成文本，不会自动写入海豹；字段与插件侧 schema v1 对应。
+      </p>
+    </details>
+  </section>
 </main>
 
 <!-- 导入对话框：粘一份已有配置进来接着改（导入是导出的逆） -->
@@ -141,6 +226,14 @@
   var v = new URLSearchParams(location.search).get('v');
   var q = v ? '?v=' + encodeURIComponent(v) : '';
   document.write('<script type="module" src="js/app.js' + q + '"><\/script>');
+})();
+</script>
+<script>
+// 联网搜索分区（独立模块，避免与模型生成器的 app.js 互相耦合）
+(function () {
+  var v = new URLSearchParams(location.search).get('v');
+  var q = v ? '?v=' + encodeURIComponent(v) : '';
+  document.write('<script type="module" src="js/web-app.js' + q + '"><\/script>');
 })();
 </script>
 </body>
