@@ -88,10 +88,10 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 
 | 页签 | 粘到插件 | JSON 形态 | 生效方式 |
 | --- | --- | --- | --- |
-| 角色设定 | 角色设定 →「角色设定（JSON）」 | `{version:1, roles:[{name,prompt}]}` | 重载 JS；`.ai role` 切换 |
-| 技能 | 技能 →「技能配置（JSON）」 | `{version:1, skills:[{name,description,platform,content}]}` | `.ai skill refresh` |
-| MCP | MCP →「MCP服务器配置（JSON）」 | **标准 MCP JSON**：`{"mcpServers":{"<服务器名>":{"type":"http","url":"…","headers":{…}}}}`；另支持扩展字段 `platform` | `.ai mcp refresh`（先开「是否启用MCP」） |
-| 知识库 | 知识库 →「知识库（JSON）」 | `{version:1, libraries:[{name,description,platform,content}]}` | `.ai kb refresh` |
+| 角色设定 | 角色设定 →「角色设定」 | `{version:1, roles:[{name,prompt}]}` | 重载 JS；`.ai role` 切换 |
+| 技能 | 技能 →「技能列表」 | `{version:1, skills:[{name,description,platform,content}]}` | `.ai skill refresh` |
+| MCP | MCP →「MCP服务器」 | **标准 MCP JSON**：`{"mcpServers":{"<服务器名>":{"type":"http","url":"…","headers":{…}}}}`；另支持扩展字段 `platform` | `.ai mcp refresh`（先开「是否启用MCP」） |
+| 知识库 | 知识库 →「知识库配置」 | `{version:1, libraries:[{name,description,platform,content}]}` | `.ai kb refresh` |
 
 共同点：
 
@@ -101,7 +101,7 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 - **直接导入文件**：
   - 技能：标准 `SKILL.md`（`---` frontmatter + 正文，这是其他 agent 通用的技能文件格式），一个文件一个技能；
   - 知识库：`.md` / `.txt`，库名取第一个 `# 标题`，没有标题时用文件名；描述取正文首段；
-  - 角色：`.md` / `.txt`，角色名取文件名，整份文本即设定（不解析 frontmatter）；
+  - 角色：`.md` / `.txt`，文件名作为角色名，整份文本作为设定；
   - MCP：`.json`，**要求标准 `mcpServers` 结构**（与 Claude Desktop / Cursor 的 `.mcp.json` 一致）；stdio（`command`）与 SSE 会明确警告并跳过。
 - 也支持把已有 JSON 粘进「导入…」继续改；导入会**替换**当前页签内容，校验不通过时不动任何东西。
 - 「恢复默认」= 与插件出厂默认一致（由 `tools/sync-default-data.mjs` 从插件源码生成，插件改默认值时重跑）。
@@ -157,7 +157,7 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 插件侧已同步改造（v5 单框 `模型配置` 取代 `api连接` + `模型规则`）。
 **要装到海豹，需要插件仓库的 `dist/aiplugin4.js` 构建产物 —— 而不仅是拉源码。**
 
-角色 / 技能 / MCP / 知识库四个页签对应插件侧的**新 JSON 配置键**（`角色设定（JSON）`、`技能配置（JSON）`、`MCP服务器配置（JSON）`、`知识库（JSON）`），
+角色 / 技能 / MCP / 知识库四个页签对应插件侧的**新 JSON 配置键**（`角色设定`、`技能列表`、`MCP服务器`、`知识库配置`），
 格式版本为 `1`。旧的多框配置项不再读取、也不自动迁移；升级后请用这四个页签重新生成并粘贴。
 
 ## 文件结构

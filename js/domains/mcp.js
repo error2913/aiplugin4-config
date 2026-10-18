@@ -1,6 +1,6 @@
 // MCP 分区：**标准 MCP 配置 JSON**：
 //   { "mcpServers": { "<服务器名>": { "type": "http", "url": "...", "headers": {…} } } }
-// 对应插件侧「MCP服务器配置（JSON）」（分组：MCP）。
+// 对应插件侧「MCP服务器」（分组：MCP）。
 //
 // 与 Claude Desktop / Cursor 的 .mcp.json 顶层结构一致；aiplugin4 额外支持一个扩展字段：
 //   platform: [QQ]   —— 平台白名单（可选）
@@ -213,7 +213,7 @@ export const mcpSpec = {
     title: 'MCP 服务器',
     itemLabel: '服务器',
     hint: '顺序 = 输出 JSON 里的键顺序；只支持 Streamable HTTP',
-    configKey: 'MCP服务器配置（JSON）',
+    configKey: 'MCP服务器',
     configGroup: 'MCP',
     collectionKey: 'mcpServers',
     importPlaceholder: '{"mcpServers":{"服务器名":{"type":"http","url":"http://127.0.0.1:3910/mcp"}}}',
@@ -246,7 +246,7 @@ export const mcpSpec = {
         '点「+ 添加服务器」或卡片上的「编辑」；也可以把标准 .mcp.json 文件拖进左侧。',
         '输出是标准 MCP JSON：顶层 mcpServers 对象，键 = 服务器名；platform 是 aiplugin4 扩展字段。',
         '卡片头的「启用」开关只决定是否把该服务器写进生成配置（关闭 = 直接移除，不写 enabled 字段）。',
-        '点「复制全部」，粘到海豹 → JS插件 → 插件设置 → aiplugin4 →「MCP」→「MCP服务器配置（JSON）」。',
+        '点「复制全部」，粘到海豹 → JS插件 → 插件设置 → aiplugin4 →「MCP」→「MCP服务器」。',
         '粘完用 .ai mcp refresh 立即生效；别忘了在「MCP」页打开「是否启用MCP」。',
     ],
 };

@@ -1,5 +1,5 @@
 // 知识库分区：一份 JSON = { version: 1, libraries: [{ name, description, platform, content }] }
-// 对应插件侧「知识库（JSON）」（分组：知识库）
+// 对应插件侧「知识库配置」（分组：知识库）
 import { DEFAULT_KB } from './default-data.js';
 import {
     baseName, firstHeading, firstParagraph, issue, normalizeText, parseDocument,
@@ -118,13 +118,13 @@ export const kbSpec = {
     title: '知识库',
     itemLabel: '知识库',
     hint: '顺序 = system prompt「知识库」段的展示顺序',
-    configKey: '知识库（JSON）',
+    configKey: '知识库配置',
     configGroup: '知识库',
     collectionKey: 'libraries',
     fileBase: 'aiplugin4-知识库',
     storageKey: 'aiplugin4-config-kb-draft',
     accept: '.md,.markdown,.txt',
-    fileHint: '支持 .md / .txt；一个文件一个库（frontmatter / # 标题 / 文件名确定库名）',
+    fileHint: '支持 .md / .txt；一个文件一个库（# 标题或文件名作为库名）',
     emptyText: '还没有知识库，点「+ 添加知识库」或把 Markdown 文件拖进来',
     fields: [
         { key: 'name', label: '库名', type: 'text', required: true, placeholder: '如：核心指令' },
@@ -145,7 +145,7 @@ export const kbSpec = {
     },
     usage: [
         '点「+ 添加知识库」或卡片上的「编辑」；也可以把 .md / .txt 文件拖进左侧。',
-        '点「复制全部」，粘到海豹 → JS插件 → 插件设置 → aiplugin4 →「知识库」→「知识库（JSON）」。',
+        '点「复制全部」，粘到海豹 → JS插件 → 插件设置 → aiplugin4 →「知识库」→「知识库配置」。',
         '粘完用 .ai kb refresh 立即生效；知识库为只读数据，AI 只能检索不能修改。',
     ],
 };

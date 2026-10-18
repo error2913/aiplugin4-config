@@ -1,5 +1,5 @@
 // 技能分区：一份 JSON = { version: 1, skills: [{ name, description, platform, content }] }
-// 对应插件侧「技能配置（JSON）」（分组：技能）
+// 对应插件侧「技能列表」（分组：技能）
 import { DEFAULT_SKILLS } from './default-data.js';
 import {
     baseName, issue, normalizeText, parseDocument, parsePlatform, platformLabel,
@@ -133,7 +133,7 @@ export const skillsSpec = {
     title: '技能',
     itemLabel: '技能',
     hint: '顺序 = system prompt「可用技能」的展示顺序',
-    configKey: '技能配置（JSON）',
+    configKey: '技能列表',
     configGroup: '技能',
     collectionKey: 'skills',
     fileBase: 'aiplugin4-技能配置',
@@ -160,7 +160,7 @@ export const skillsSpec = {
     },
     usage: [
         '点「+ 添加技能」或卡片上的「编辑」；也可以把 SKILL.md 文件拖进左侧。',
-        '点「复制全部」，粘到海豹 → JS插件 → 插件设置 → aiplugin4 →「技能」→「技能配置（JSON）」。',
+        '点「复制全部」，粘到海豹 → JS插件 → 插件设置 → aiplugin4 →「技能」→「技能列表」。',
         '粘完用 .ai skill refresh 立即生效（或重载 JS）。',
     ],
 };

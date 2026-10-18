@@ -1,5 +1,5 @@
 // 角色设定分区：一份 JSON = { version: 1, roles: [{ name, prompt }] }
-// 对应插件侧「角色设定（JSON）」（分组：角色设定）
+// 对应插件侧「角色设定」（分组：角色设定）
 import { DEFAULT_ROLES } from './default-data.js';
 import {
     baseName, issue, normalizeText, parseDocument, readCollection, validateName, validateVersion,
@@ -92,13 +92,13 @@ export const rolesSpec = {
     title: '角色',
     itemLabel: '角色',
     hint: '顺序 = 插件里的角色序号；第一行名称会被 .ai role 使用',
-    configKey: '角色设定（JSON）',
+    configKey: '角色设定',
     configGroup: '角色设定',
     collectionKey: 'roles',
     fileBase: 'aiplugin4-角色设定',
     storageKey: 'aiplugin4-config-roles-draft',
     accept: '.md,.markdown,.txt',
-    fileHint: '支持 .md / .txt；一个文件一个角色（frontmatter 的 name 优先，否则用文件名）',
+    fileHint: '支持 .md / .txt；一个文件一个角色（文件名作为角色名，正文作为设定）',
     emptyText: '还没有角色，点「+ 添加角色」或把 Markdown / 文本文件拖进来',
     fields: [
         { key: 'name', label: '角色名', type: 'text', required: true, maxLength: 20, placeholder: '如：测试机器人', note: '超过 20 字符时插件会截断' },
@@ -116,7 +116,7 @@ export const rolesSpec = {
     },
     usage: [
         '点「+ 添加角色」或卡片上的「编辑」写设定；也可以把 .md / .txt 文件拖进左侧。',
-        '点「复制全部」，粘到海豹 → JS插件 → 插件设置 → aiplugin4 →「角色设定」→「角色设定（JSON）」。',
+        '点「复制全部」，粘到海豹 → JS插件 → 插件设置 → aiplugin4 →「角色设定」→「角色设定」。',
         '重载 JS 生效；.ai role 可切换角色。',
     ],
 };
