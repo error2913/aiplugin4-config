@@ -82,13 +82,15 @@ f.onload = async () => {
         check('技能默认正文非空', skillsDefault.skills[0].content.length > 100);
 
         await clickTab('mcp');
-        check('MCP 默认 3 台', cardCount('mcp') === 3, cardCount('mcp'));
+        check('MCP 默认 4 台', cardCount('mcp') === 4, cardCount('mcp'));
         const mcpDefault = json('mcpPreview');
         check('MCP 输出标准 mcpServers 对象', !!mcpDefault.mcpServers && !Array.isArray(mcpDefault.mcpServers));
-        check('MCP 默认包含 mcp-files-exec / md-html-render / mcp-browser',
-            Object.keys(mcpDefault.mcpServers).join(',') === 'mcp-files-exec,md-html-render,mcp-browser');
+        check('MCP 默认包含 mcp-files-exec / md-html-render / mcp-browser / image-host',
+            Object.keys(mcpDefault.mcpServers).join(',') === 'mcp-files-exec,md-html-render,mcp-browser,image-host');
         check('md-html-render 限定 QQ',
             JSON.stringify(mcpDefault.mcpServers['md-html-render'].platform) === '["QQ"]');
+        check('image-host 指向图床 MCP 端口',
+            mcpDefault.mcpServers['image-host'].url === 'http://127.0.0.1:46680/mcp');
 
         await clickTab('kb');
         check('知识库默认 3 个', cardCount('kb') === 3, cardCount('kb'));

@@ -2,6 +2,7 @@
 //
 // 为什么需要：生成器的「恢复默认 / 初始状态」必须与插件出厂默认一致，
 // 否则用户不做任何修改复制出来的配置也会和插件内置行为不同。
+// 例外是 MCP：插件出厂默认为空（避免没装 MCP 后端时报错），生成器保留示例供按需复制。
 //
 // 运行（在生成器仓库根目录）：
 //   node tools/sync-default-data.mjs
@@ -78,8 +79,10 @@ function kbFromRaw(raw, index) {
     };
 }
 
-// 角色与 MCP 的默认值目前直接写在插件配置注册代码里（不是独立常量），这里手工同步。
+// 角色的默认值直接写在插件配置注册代码里（不是独立常量），这里手工同步。
 // 改动插件默认值时必须同步本文件（生成器仓库的测试会检查默认配置可被插件解析）。
+// MCP 例外：插件出厂默认为空（避免没装 MCP 后端时启动/对话报错），生成器保留一组示例供按需复制，
+// 所以这里**不要**跟着插件清空，新增示例（如 image-host）时改这里即可。
 const DEFAULT_ROLES_SOURCE = [
     {
         name: '测试机器人',
@@ -112,6 +115,14 @@ const DEFAULT_MCP_SOURCE = [
         token: '',
         headers: {},
     },
+    {
+        name: 'image-host',
+        platform: [],
+        type: 'http',
+        url: 'http://127.0.0.1:46680/mcp',
+        token: '',
+        headers: { Authorization: 'Bearer token' },
+    },
 ];
 
 const DEFAULT_SKILLS_SOURCE = mod.SEALDICE_COMMAND_SKILLS.map(skillFromRaw);
@@ -126,7 +137,7 @@ try {
 
 const out = `// AUTO-GENERATED — 不要手改。
 // 由 tools/sync-default-data.mjs 从 aiplugin4 源码生成（${pluginCommit ? `aiplugin4 @ ${pluginCommit}` : 'aiplugin4'}）。
-// 生成器「恢复默认 / 初始状态」必须与插件出厂默认一致；插件改默认值时重跑该脚本。
+// 角色 / 技能 / 知识库与插件出厂默认一致；MCP 插件出厂默认为空，生成器保留示例供按需复制。插件改默认值时重跑该脚本。
 export const DEFAULT_ROLES = ${JSON.stringify(DEFAULT_ROLES_SOURCE, null, 4)};
 
 export const DEFAULT_SKILLS = ${JSON.stringify(DEFAULT_SKILLS_SOURCE, null, 4)};

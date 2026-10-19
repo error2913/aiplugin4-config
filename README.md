@@ -104,7 +104,7 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
   - 角色：`.md` / `.txt`，文件名作为角色名，整份文本作为设定；
   - MCP：`.json`，**要求标准 `mcpServers` 结构**（与 Claude Desktop / Cursor 的 `.mcp.json` 一致）；stdio（`command`）与 SSE 会明确警告并跳过。
 - 也支持把已有 JSON 粘进「导入…」继续改；导入会**替换**当前页签内容，校验不通过时不动任何东西。
-- 「恢复默认」= 与插件出厂默认一致（由 `tools/sync-default-data.mjs` 从插件源码生成，插件改默认值时重跑）。
+- 「恢复默认」：角色 / 技能 / 知识库与插件出厂默认一致；**MCP 插件出厂默认为空**，生成器保留四台示例（`mcp-files-exec` / `md-html-render` / `mcp-browser` / `image-host`）供按需复制。默认数据由 `tools/sync-default-data.mjs` 从插件源码生成，插件改默认值时重跑。
 - MCP 输出是**标准 MCP JSON**：顶层 `mcpServers` 对象，键 = 服务器名，字段用 `type` / `url` / `headers`；`token` 只是输入简写，导出时合并成 `Authorization: Bearer …`，不会输出非标准字段；`platform` 是 aiplugin4 的扩展字段（标准客户端会忽略未知字段）。启用开关关闭的服务器直接不出现。
 - 只支持 Streamable HTTP 的 MCP。
 - 生成器的「启用」是**条目级**开关，只影响该条目是否出现在生成的 JSON 里；「是否启用MCP / 启用知识库记忆 / 会话回收」这类**全局开关**仍由插件配置页单独设置，不写进 JSON。

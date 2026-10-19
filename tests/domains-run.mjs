@@ -22,7 +22,7 @@ const check = (name, cond, extra = '') => {
 };
 const eq = (name, actual, expected) => check(name, actual === expected, `${JSON.stringify(actual)} !== ${JSON.stringify(expected)}`);
 
-console.log('=== 默认值与当前插件默认一致（数量 / 关键字段） ===');
+console.log('=== 默认值：角色 / 技能 / 知识库与插件一致；MCP 为生成器示例 ===');
 {
     eq('角色默认 1 条', DEFAULT_ROLES.length, 1);
     eq('角色名', DEFAULT_ROLES[0].name, '测试机器人');
@@ -30,8 +30,11 @@ console.log('=== 默认值与当前插件默认一致（数量 / 关键字段）
     eq('技能默认 1 条', DEFAULT_SKILLS.length, 1);
     eq('技能名', DEFAULT_SKILLS[0].name, '录卡');
     check('技能正文非空', DEFAULT_SKILLS[0].content.length > 100);
-    eq('MCP 默认 3 台', DEFAULT_MCP.length, 3);
+    eq('MCP 默认 4 台', DEFAULT_MCP.length, 4);
     eq('MCP 第二台平台', JSON.stringify(DEFAULT_MCP[1].platform), JSON.stringify(['QQ']));
+    eq('MCP 第四台名称', DEFAULT_MCP[3].name, 'image-host');
+    eq('MCP image-host 地址', DEFAULT_MCP[3].url, 'http://127.0.0.1:46680/mcp');
+    eq('MCP image-host 默认带 token 头', JSON.stringify(DEFAULT_MCP[3].headers), JSON.stringify({ Authorization: 'Bearer token' }));
     eq('知识库默认 3 个', DEFAULT_KB.length, 3);
     eq('ob11 知识库平台', JSON.stringify(DEFAULT_KB[2].platform), JSON.stringify(['QQ']));
     check('默认知识库内容包含 ob11', DEFAULT_KB[2].content.includes('call_ob11_api'));
