@@ -3,7 +3,7 @@
 import {
     PROVIDER_TEMPLATES, API_DIALECTS, MODEL_KINDS, PURPOSES, KNOWN_VENDORS,
     getTemplate, templateIdForBaseUrl,
-    resolveVendorFromUrl, MEDIA_VENDOR_USES, providerForTemplate,
+    resolveVendorFromUrl, MEDIA_VENDOR_USES, providerForTemplate, vendorLabel,
 } from './templates.js';
 import { decideKind } from './classify.js';
 import {
@@ -412,41 +412,43 @@ function renderPanel() {
             '只用于界面与日志展示。留空则用 API 地址的域名。'));
     }
 
-    // ---- 供应商标识：可编辑（留空 = 自动识别）
-    // 说明：这是**逃生舱**，但必须可自由输入 —— 插件的 media_presets 收录了一批
-    // 只做媒体的 vendor（MiniMax/FishAudio/ElevenLabs/百度/火山方舟/腾讯/Stability/Google Cloud），
-    // 它们没有对应的聊天模板，纯下拉会漏掉。
+    // ---- 供应商（可选覆盖）：下拉统一显示供应商名称，写入的仍是插件内部 vendor 标识
+    // 留空 = 按 API 地址自动识别。插件的 media_presets 收录了一批只做媒体的 vendor
+    // （MiniMax/FishAudio/ElevenLabs/百度/火山方舟/腾讯/Stability/Google Cloud），
+    // 它们没有对应的聊天模板，所以选项来自 KNOWN_VENDORS（聊天模板 ∪ 媒体预设）。
     // 用 let：URL 被手改后要重算（见 updateVendorStatus）。
     let detected = resolveVendorFromUrl(draft.baseURL);
     const vWrap = el('div', 'field');
     const vLabel = el('label', 'field-label');
-    vLabel.textContent = '供应商标识';
+    vLabel.textContent = '供应商（可选覆盖）';
     vWrap.appendChild(vLabel);
 
-    const vIn = document.createElement('input');
-    vIn.type = 'text';
-    vIn.value = draft.provider || '';
-    vIn.setAttribute('list', 'vendorOptions');
-    vIn.placeholder = detected || '未识别（按 OpenAI 兼容处理）';
-    vIn.autocomplete = 'off';
-    vIn.spellcheck = false;
-    vIn.oninput = () => {
-        draft.provider = vIn.value.trim();
-        updateVendorStatus();
-        renderOutput();
-    };
-    vWrap.appendChild(vIn);
-
-    // datalist：给建议，同时允许自由输入
-    const dl = document.createElement('datalist');
-    dl.id = 'vendorOptions';
+    const vSel = document.createElement('select');
+    vSel.id = 'vendorOptions';
+    const vAuto = document.createElement('option');
+    vAuto.value = '';
+    vSel.appendChild(vAuto);
     for (const v of KNOWN_VENDORS) {
         const o = document.createElement('option');
         o.value = v.value;
-        o.label = v.label;
-        dl.appendChild(o);
+        o.textContent = v.label;
+        vSel.appendChild(o);
     }
-    vWrap.appendChild(dl);
+    // 导入的配置可能含插件认识、但生成器未收录的 vendor：保留原值，避免静默丢掉
+    const currentProvider = (draft.provider || '').trim();
+    if (currentProvider && !KNOWN_VENDORS.some(v => v.value === currentProvider)) {
+        const o = document.createElement('option');
+        o.value = currentProvider;
+        o.textContent = `${currentProvider}（未收录的供应商标识）`;
+        vSel.appendChild(o);
+    }
+    vSel.value = currentProvider;
+    vSel.onchange = () => {
+        draft.provider = vSel.value;
+        updateVendorStatus();
+        renderOutput();
+    };
+    vWrap.appendChild(vSel);
 
     const vStatus = el('div', 'detected-vendor' + (detected || draft.provider ? '' : ' unknown'));
     vWrap.appendChild(vStatus);
@@ -458,7 +460,9 @@ function renderPanel() {
         // 否则会夺走正在输入的 URL 输入框的焦点）。不重算的话这里会一直显示旧结论 ——
         // 实测出现过"URL 已改成专属域名，状态却还写着 当前生效：alibaba"。
         detected = resolveVendorFromUrl(draft.baseURL);
-        vIn.placeholder = detected || '未识别（按 OpenAI 兼容处理）';
+        vAuto.textContent = detected
+            ? `自动识别（${vendorLabel(detected)}）`
+            : '自动识别（按 API 地址）';
 
         const explicit = (draft.provider || '').trim();
         const eff = explicit || detected;
@@ -511,7 +515,7 @@ function renderPanel() {
                 ? '已手工指定，覆盖自动识别。'
                 : (detected
                     ? '留空即可 —— 已按 API 地址自动识别。'
-                    : '该地址未收录。代理原生接口时请填对方标识，否则留空按 OpenAI 兼容处理。'),
+                    : '该地址未收录。代理原生接口时请选择对应供应商，否则留空按 OpenAI 兼容处理。'),
             usesNote,
             mismatchNote,
             modelNote,

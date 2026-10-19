@@ -47,8 +47,8 @@ frame.onload = async () => {
     lines.push('改成专属域名后 URL: ' + urlIn.value);
 
     // 专属域名 host 认不出 → provider 留空（走通用兼容结构），**不该**出形态警示
-    const vIn = pqa('.field input').find(i => i.getAttribute('list') === 'vendorOptions');
-    lines.push('供应商标识字段值: ' + JSON.stringify(vIn.value) + '（专属域名认不出，留空是正常的）');
+    const vIn = q('#vendorOptions');
+    lines.push('供应商下拉值: ' + JSON.stringify(vIn.value) + '（专属域名认不出，留空是正常的）');
     lines.push('生效提示: ' + (q('.detected-vendor') ? q('.detected-vendor').textContent : '(无)'));
     const warn = q('#panelBody .field-note.vendor-warn');
     lines.push('形态警示: ' + (warn ? warn.textContent.slice(0, 60) : '(无，正确)'));

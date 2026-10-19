@@ -432,16 +432,19 @@ f.onload = async () => {
         {
             d.querySelector('.pcard .btn-edit').click();
             await sleep(80);
-            const vIn = pq('#vendorOptions') ? [...pqa('.field input')].find(i => i.getAttribute('list') === 'vendorOptions') : null;
-            check('找到供应商标识输入框', !!vIn);
+            const vIn = pq('#vendorOptions');
+            check('找到供应商下拉框', !!vIn);
+            check('选项显示供应商名称而不是标识',
+                [...vIn.options].filter(o => o.value).every(o => o.textContent && o.textContent !== o.value),
+                [...vIn.options].slice(0, 8).map(o => `${o.value}=${o.textContent}`).join(' | '));
             vIn.value = 'elevenlabs';
-            vIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+            vIn.dispatchEvent(new w.Event('change', { bubbles: true }));
             await sleep(40);
             check('标注该 vendor 收录的媒体用途（elevenlabs 只做语音）',
                 /媒体用途：语音合成/.test(pq('.field-note:last-of-type') ? pqa('.field-note').map(e => e.textContent).join(' ') : ''),
                 pqa('.field-note').map(e => e.textContent).join(' | ').slice(0, 300));
             vIn.value = 'dashscope';
-            vIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+            vIn.dispatchEvent(new w.Event('change', { bubbles: true }));
             await sleep(40);
             check('dashscope 标注语音合成 / 文生图',
                 /媒体用途：语音合成 \/ 文生图/.test(pqa('.field-note').map(e => e.textContent).join(' ')),
@@ -580,7 +583,7 @@ f.onload = async () => {
             d.querySelector('.pcard .btn-edit').click();
             await sleep(120);
             const provSel = pqa('select')[0];
-            const vendorInput = () => pqa('.field input').find(i => i.getAttribute('list') === 'vendorOptions');
+            const vendorInput = () => pq('#vendorOptions');
 
             // 模板列表里**不该**再有「百炼原生」—— 兼容层做好后，"选兼容还是选原生"
             // 不该让用户决定（插件按模型名分流：qwen-image 走兼容、wanx/TTS 走主机根原生）。
@@ -630,7 +633,7 @@ f.onload = async () => {
 
             // 供应商标识仍是可选逃生舱：手工填 dashscope 应对"只暴露原生接口"的部署
             vendorInput().value = 'dashscope';
-            vendorInput().dispatchEvent(new w.Event('input', { bubbles: true }));
+            vendorInput().dispatchEvent(new w.Event('change', { bubbles: true }));
             await sleep(80);
             check('手工填 dashscope 仍可用（逃生舱保留）',
                 /dashscope（手工指定）/.test(pq('.detected-vendor').textContent),
@@ -639,7 +642,7 @@ f.onload = async () => {
                 !!pq('.field-note.vendor-warn'),
                 (pq('.field-note.vendor-warn') || {}).textContent || '(无)');
             vendorInput().value = '';
-            vendorInput().dispatchEvent(new w.Event('input', { bubbles: true }));
+            vendorInput().dispatchEvent(new w.Event('change', { bubbles: true }));
             await sleep(80);
 
             // 切回阿里百炼：provider 应清空（它的地址能反查回自己）

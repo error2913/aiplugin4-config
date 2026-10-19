@@ -243,8 +243,8 @@ export const MEDIA_VENDOR_USES = {
 };
 
 /**
- * 供应商标识的建议列表 = 聊天模板的 vendor ∪ media_presets 的 vendor。
- * 供 `<datalist>` 用：既给建议，又**允许自由输入**（插件可能新增、或用户自建网关）。
+ * 供应商下拉选项 = 聊天模板的 vendor ∪ media_presets 的 vendor。
+ * 显示 label（供应商名称），写入 value（插件内部 vendor 标识）。
  */
 export const KNOWN_VENDORS = (() => {
     const seen = new Set();
@@ -258,6 +258,12 @@ export const KNOWN_VENDORS = (() => {
     MEDIA_VENDORS.forEach(add);
     return out.sort((a, b) => a.value.localeCompare(b.value));
 })();
+
+/** vendor 标识 → 可读供应商名称（未收录时原样返回） */
+export function vendorLabel(vendor) {
+    const hit = KNOWN_VENDORS.find(v => v.value === vendor);
+    return hit ? hit.label : vendor;
+}
 
 /** 反查模板：给定 baseUrl/apiKey 之外的线索，猜用户当初选的是哪个模板 */
 export function templateIdForBaseUrl(baseUrl, api) {

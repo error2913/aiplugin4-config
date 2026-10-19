@@ -52,13 +52,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         check('  警示有独立的样式类（黄字）', !!pq('.field-note.vendor-warn'));
 
         // 改成 alibaba → 警示消失
-        const vIn = pq('.detected-vendor') ? null : null;
-        const vInput = [...d.querySelectorAll('#panelBody input')].find((i) => i.placeholder === '未识别（按 OpenAI 兼容处理）'
-            || /dashscope/.test(i.value));
-        check('找到供应商标识输入框', !!vInput, vInput ? vInput.value : '(没找到)');
+        const vInput = pq('#vendorOptions');
+        check('找到供应商下拉框', !!vInput, vInput ? vInput.value : '(没找到)');
         if (vInput) {
             vInput.value = 'alibaba';
-            vInput.dispatchEvent(new f.contentWindow.Event('input', { bubbles: true }));
+            vInput.dispatchEvent(new f.contentWindow.Event('change', { bubbles: true }));
             await sleep(150);
             check('改成 alibaba 后警示消失', !/兼容模式/.test(note()), JSON.stringify(note().slice(0, 120)));
         }
@@ -68,7 +66,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         check('找到 API 地址输入框', !!urlInput, urlInput ? urlInput.value : '(没找到)');
         if (urlInput && vInput) {
             vInput.value = 'dashscope';
-            vInput.dispatchEvent(new f.contentWindow.Event('input', { bubbles: true }));
+            vInput.dispatchEvent(new f.contentWindow.Event('change', { bubbles: true }));
             urlInput.value = 'https://llm-w67ttc0b3gqiltm8.cn-beijing.maas.aliyuncs.com';
             urlInput.dispatchEvent(new f.contentWindow.Event('input', { bubbles: true }));
             await sleep(150);
