@@ -55,22 +55,14 @@ export function downloadText(filename, text) {
 
 /**
  * 打开系统文件选择器。不插 DOM 的常驻 input，避免各页签重复写隐藏 input。
- * directory = true 时用目录选择器（webkitdirectory），用于技能目录批量导入。
- * @param {{accept?:string, multiple?:boolean, directory?:boolean, onFiles:(files:File[])=>void}} opts
+ * @param {{accept?:string, multiple?:boolean, onFiles:(files:File[])=>void}} opts
  */
 export function pickFiles(opts) {
     const input = document.createElement('input');
     input.type = 'file';
+    input.accept = opts.accept || '.json';
+    input.multiple = !!opts.multiple;
     input.style.display = 'none';
-    if (opts.directory) {
-        // 目录选择时不能设 accept：否则浏览器会按扩展名过滤，连 SKILL.md 都可能选不中
-        input.webkitdirectory = true;
-        input.setAttribute('webkitdirectory', '');
-        input.multiple = true;
-    } else {
-        input.accept = opts.accept || '.json';
-        input.multiple = !!opts.multiple;
-    }
     document.body.appendChild(input);
     input.addEventListener('change', () => {
         const picked = [...(input.files || [])];

@@ -122,13 +122,6 @@ export function fileName(filename) {
     return String(filename ?? '').replace(/^.*[\\/]/, '');
 }
 
-/** 技能文件导入路由：只有目录选择器（webkitRelativePath）才批量解析；
- *  普通多选/拖拽逐文件导入，避免多个同名 SKILL.md 被当成同一目录。 */
-export function shouldBatchImport(files) {
-    return (Array.isArray(files) ? files : []).some(file =>
-        typeof file?.webkitRelativePath === 'string' && file.webkitRelativePath.trim() !== '');
-}
-
 /** 解析 JSON，兼容尾逗号（与插件 utils/json.ts 同一策略） */
 export function parseJsonWithTrailingCommas(text) {
     const raw = String(text ?? '');

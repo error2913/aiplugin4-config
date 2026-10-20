@@ -18,7 +18,7 @@
 
 | 区域 | 内容 |
 | --- | --- |
-| 左（输入） | `.pane-head`（标题 + `.pane-hint`）+ 可选分区级选项 `.pane-options` + 卡片网格 `.card-grid`（或该分区的说明/拖放区） |
+| 左（输入） | `.pane-head`（标题 + `.pane-hint`）+ 卡片网格 `.card-grid`（或该分区的说明/拖放区） |
 | 右（输出） | `.pane.pane-output`：标题行（含遮蔽/格式化开关）→ 校验区 `.validation` → 预览 `.preview` → 工具栏 `.actions` → 文件导入结果 → 使用说明 `details.usage-box` |
 
 窄屏（≤1080px）由 `.layout` 自动单列，不要另写断点。
@@ -64,7 +64,6 @@
 | 6 | 清空 | `btn` | `confirm` 后清空 |
 
 - 模型 / 联网 / 内容分区都遵循这个顺序；内容分区由 `js/domain-app.js` 生成，模型 / 联网在 `index.html` 里同样顺序。
-- 仅当分区 spec 提供 `fromFiles`（目前是技能）时，在「导入文件…」与「恢复默认」之间多一个「导入目录…」按钮，用 `pickFiles({directory:true})` 选择目录并批量导入；其余分区不显示，行为不变。
 - 复制/下载/文件读取/导入对话框统一用 `js/ui.js` 的 `copyText` / `downloadText` / `pickFiles` / `readFileText` / `openImportDialog`。
 
 ## 5. 导入对话框（统一）
@@ -94,11 +93,10 @@
 
 ## 7. 文件导入（统一）
 
-- 触发：工具栏「导入文件…」、分区提供 `fromFiles` 时的「导入目录…」、或左侧拖放区；统一用 `ui.js` 的 `pickFiles` 和 `readFileText`。
+- 触发：工具栏「导入文件…」或左侧拖放区；统一用 `ui.js` 的 `pickFiles` 和 `readFileText`。
 - 单文件上限 2MB；逐文件解析，失败的列在该页签的 `.file-msg` 中，**不破坏已有内容**。
-- 有 `spec.fromFiles` 的分区走**批量路径**：读完整批文件后一次调用 `fromFiles([{path,text}])`，路径优先用 `file.webkitRelativePath`、拿不到时用 `file.name`；其余分区保持逐文件调用 `fromFile(name,text)`。
 - 文件类型：
-  - 技能：标准 `SKILL.md`（跨 agent 通用格式，frontmatter 里取 name/description/platform，正文作 content）；目录导入时一个顶层目录 = 一个技能，同目录其余文本文件作 `resources`（只读参考，插件不执行）；
+  - 技能：标准 `SKILL.md`（跨 agent 通用格式，frontmatter 里取 name/description/platform，正文作 content）；
   - 知识库：`.md` / `.txt`（`#` 标题作库名，首段作描述，正文原样）；
   - 角色：`.md` / `.txt`（文件名作角色名，整份文本作设定）；
   - MCP：标准 `mcpServers` JSON（Claude Desktop / Cursor `.mcp.json`）；
@@ -116,7 +114,6 @@
 ## 9. 开关与提示
 
 - 「遮蔽敏感信息」只在有敏感字段的页签出现（目前 MCP）；「格式化」所有页签都有，位置在输出区标题行右侧。
-- 分区级选项（目前只有技能「自动补入出厂默认技能」）放在左侧 `.pane-options`，用 `label.toggle` + `input[type=checkbox]`；note 要说明勾选与否生成的 JSON 差异，状态随草稿存 localStorage。
 - 校验结果统一放 `.validation`：错误红色 `.vtitle`，提示黄色 `.vtitle.warn`；错误时复制按钮禁用。
 - 操作反馈统一用 `ui.js` 的 `toast(msg, 'ok' | 'err')`，不弹 `alert`（删除确认除外）。
 - 文案用中文；不使用 emoji；图标优先用文字或 CSS，不引入字符箭头以外的装饰。

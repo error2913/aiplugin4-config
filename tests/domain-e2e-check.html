@@ -191,29 +191,23 @@ f.onload = async () => {
         mcpToggle.dispatchEvent(new w.Event('change', { bubbles: true }));
         await sleep(40);
 
-        // ---------- 文件导入（技能目录：SKILL.md + 参考文件） ----------
+        // ---------- 文件导入（技能） ----------
         await clickTab('skills');
         const before = cardCount('skills');
         const dt = new w.DataTransfer();
-        const file = new w.File(['---\nname: 文件技能\ndescription: 来自文件\nplatform: [QQ]\n---\n# 正文\n内容'], 'SKILL.md', { type: 'text/markdown' });
-        // 模拟目录选择器给出的相对路径；拖拽场景由 importFiles 用 file.name 兜底
-        Object.defineProperty(file, 'webkitRelativePath', { value: 'from-file/SKILL.md' });
-        const ref = new w.File(['# 参考内容'], 'forms.md', { type: 'text/markdown' });
-        Object.defineProperty(ref, 'webkitRelativePath', { value: 'from-file/references/forms.md' });
+        const file = new w.File(['---\nname: 文件技能\ndescription: 来自文件\nplatform: [QQ]\n---\n# 正文\n内容'], 'from-file.md', { type: 'text/markdown' });
         dt.items.add(file);
-        dt.items.add(ref);
         const zone = d.getElementById('skillsDrop');
         const ev = new w.Event('drop', { bubbles: true, cancelable: true });
         Object.defineProperty(ev, 'dataTransfer', { value: dt });
         zone.dispatchEvent(ev);
         await sleep(400);
-        check('目录导入后技能 +1', cardCount('skills') === before + 1, `${before} -> ${cardCount('skills')}`);
+        check('文件导入后技能 +1', cardCount('skills') === before + 1, `${before} -> ${cardCount('skills')}`);
         const skillsAfter = json('skillsPreview');
         const importedSkill = skillsAfter.skills.find(s => s.name === '文件技能');
-        check('目录导入解析 name/description/platform/resources',
+        check('文件导入解析 name/description/platform',
             !!importedSkill && importedSkill.description === '来自文件' &&
-            JSON.stringify(importedSkill.platform) === '["QQ"]' &&
-            JSON.stringify(importedSkill.resources) === '{"references/forms.md":"# 参考内容"}',
+            JSON.stringify(importedSkill.platform) === '["QQ"]',
             JSON.stringify(importedSkill));
 
         // ---------- 知识库：添加库 ----------
