@@ -155,6 +155,21 @@ body {
 .pane-head-2 { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border); }
 .pane-head h2 { margin: 0; font-size: var(--fs-lg); font-weight: 620; }
 .pane-hint { font-size: var(--fs-2xs); color: var(--text-faint); }
+
+/* 分区级选项（如技能「自动补入出厂默认技能」）：插在 pane-head 与内容区之间 */
+.pane-options {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  padding: 9px 12px;
+  margin: -2px 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pane-options .option { display: flex; flex-direction: column; gap: 2px; }
+.pane-options .toggle { font-size: var(--fs-xs); color: var(--text); }
+.pane-options .option-note { margin: 0; padding-left: 22px; font-size: var(--fs-2xs); color: var(--text-faint); line-height: 1.55; }
 .hint { color: var(--text-dim); font-size: var(--fs-sm); margin: 6px 0 14px; }
 .hint strong { color: var(--text); font-weight: 600; }
 

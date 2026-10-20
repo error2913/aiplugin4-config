@@ -25,15 +25,35 @@ const nextUid = () => `d${++uidSeq}-${Math.random().toString(36).slice(2, 7)}`;
 
 // ---------------------------------------------------------------- 状态与草稿
 
-/** @type {Map<string, {items:any[], pretty:boolean, mask:boolean}>} */
+/** @type {Map<string, {items:any[], options:Record<string,any>, pretty:boolean, mask:boolean}>} */
 const states = new Map();
 const saveTimers = new Map();
+
+/** spec.options 的默认值（只收 spec 声明过的键；旧草稿没有 options 时用它兜底） */
+function defaultOptions(spec) {
+    const out = {};
+    for (const opt of spec.options || []) {
+        if (opt.key) out[opt.key] = opt.default;
+    }
+    return out;
+}
+
+/** 合并 options：未知键忽略，checkbox 统一成布尔；缺省键用 spec 默认值 */
+function mergeOptions(spec, value) {
+    const out = defaultOptions(spec);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+    for (const opt of spec.options || []) {
+        if (!Object.prototype.hasOwnProperty.call(value, opt.key) || value[opt.key] === undefined) continue;
+        out[opt.key] = opt.type === 'checkbox' ? !!value[opt.key] : value[opt.key];
+    }
+    return out;
+}
 
 function loadState(spec) {
     const fallback = withUids(spec.defaults, nextUid).map(item => spec.normalizeItem(item));
     try {
         const raw = localStorage.getItem(spec.storageKey);
-        if (!raw) return { items: fallback, pretty: false, mask: false };
+        if (!raw) return { items: fallback, options: defaultOptions(spec), pretty: false, mask: false };
         const parsed = JSON.parse(raw);
         const items = Array.isArray(parsed?.items) ? parsed.items : [];
         return {
@@ -42,11 +62,13 @@ function loadState(spec) {
                 normalized._uid = item && typeof item._uid === 'string' ? item._uid : nextUid();
                 return normalized;
             }),
+            // 旧草稿只有 { items }：options 取 spec 默认值
+            options: mergeOptions(spec, parsed?.options),
             pretty: false,
             mask: false,
         };
     } catch {
-        return { items: fallback, pretty: false, mask: false };
+        return { items: fallback, options: defaultOptions(spec), pretty: false, mask: false };
     }
 }
 
@@ -54,7 +76,7 @@ function saveStateSoon(spec, state) {
     clearTimeout(saveTimers.get(spec.id));
     saveTimers.set(spec.id, setTimeout(() => {
         try {
-            localStorage.setItem(spec.storageKey, JSON.stringify({ items: state.items }));
+            localStorage.setItem(spec.storageKey, JSON.stringify({ items: state.items, options: state.options }));
         } catch { /* 隐私模式 / 配额满：静默忽略 */ }
     }, 350));
 }
@@ -64,6 +86,31 @@ function defaultItems(spec) {
 }
 
 // ---------------------------------------------------------------- 布局
+
+const optionInputId = (spec, opt) => `${spec.id}Opt_${opt.key}`;
+
+/** 分区级选项（目前只有技能的 includeDefaults）；没有 options 的分区不渲染，输出不变 */
+function optionsHtml(spec) {
+    const list = Array.isArray(spec.options) ? spec.options : [];
+    const rows = list.map(opt => {
+        if (opt.type !== 'checkbox') return '';
+        return `<div class="option">
+            <label class="toggle" title="${opt.note || opt.label}">
+              <input type="checkbox" id="${optionInputId(spec, opt)}"><span>${opt.label}</span>
+            </label>
+            ${opt.note ? `<p class="option-note">${opt.note}</p>` : ''}
+          </div>`;
+    }).join('');
+    return rows ? `<div class="pane-options">${rows}</div>` : '';
+}
+
+/** localStorage 里的选项值 → 勾选框状态（导入 / 恢复默认后调用） */
+function syncOptionInputs(spec, state) {
+    for (const opt of spec.options || []) {
+        const input = $(optionInputId(spec, opt));
+        if (input && opt.type === 'checkbox') input.checked = !!state.options[opt.key];
+    }
+}
 
 function buildLayout(spec) {
     const layout = $(`${spec.id}Layout`);
@@ -79,6 +126,7 @@ function buildLayout(spec) {
           <h2>${spec.title}</h2>
           <span class="pane-hint">${spec.hint}</span>
         </div>
+        ${optionsHtml(spec)}
         <div class="drop-zone" id="${spec.id}Drop">
           <strong>拖入文件</strong><span>${spec.fileHint}</span>
         </div>
@@ -101,6 +149,7 @@ function buildLayout(spec) {
           <button class="btn" id="${spec.id}Download" type="button">下载 .json</button>
           <button class="btn" id="${spec.id}ImportOpen" type="button">导入…</button>
           <button class="btn" id="${spec.id}FileOpen" type="button">导入文件…</button>
+          ${spec.fromFiles ? `<button class="btn" id="${spec.id}DirOpen" type="button">导入目录…</button>` : ''}
           <button class="btn" id="${spec.id}Reset" type="button">恢复默认</button>
           <button class="btn" id="${spec.id}Clear" type="button">清空</button>
         </div>
@@ -361,7 +410,7 @@ function saveEditor() {
 // ---------------------------------------------------------------- 输出 / 校验
 
 function currentConfig(spec, state) {
-    let config = spec.build(state.items);
+    let config = spec.build(state.items, state.options);
     if (spec.supportMask && state.mask && typeof spec.maskConfig === 'function') {
         config = spec.maskConfig(config);
     }
@@ -371,7 +420,7 @@ function currentConfig(spec, state) {
 function renderOutput(spec, state) {
     const preview = $(`${spec.id}Preview`);
     if (!preview) return;
-    const { problems, warnings } = spec.validate(state.items);
+    const { problems, warnings } = spec.validate(state.items, state.options);
     const config = currentConfig(spec, state);
     preview.textContent = stringifyConfig(config, state.pretty);
 
@@ -420,6 +469,11 @@ function renderAll(spec, state) {
 
 function applyDomainImport(spec, state, result) {
     state.items = withUids(result.items, nextUid).map(item => spec.normalizeItem(item));
+    // 导入的顶层选项（如 includeDefaults:false）合并进当前状态；JSON 没带该字段时保持原值
+    if (result.options && typeof result.options === 'object') {
+        state.options = mergeOptions(spec, { ...state.options, ...result.options });
+        syncOptionInputs(spec, state);
+    }
     saveStateSoon(spec, state);
     renderAll(spec, state);
     toast(`已导入 ${state.items.length} 个${spec.itemLabel}`, 'ok');
@@ -457,9 +511,75 @@ function showFileMessage(spec, lines) {
     box.hidden = false;
 }
 
+/** 目录选择器给的相对路径；拿不到时退回 file.name（拖拽 / 老浏览器） */
+function fileRelativePath(file) {
+    const rel = typeof file.webkitRelativePath === 'string' ? file.webkitRelativePath.trim() : '';
+    return rel || file.name;
+}
+
+/** 批量导入（spec.fromFiles）：读完整批文件后一次交给分区解析（技能目录导入） */
+async function importFilesBatch(spec, state, files) {
+    const messages = [];
+    const entries = [];
+    for (const file of files) {
+        if (file.size > 2 * 1024 * 1024) {
+            messages.push(`${file.name}：文件超过 2MB，已跳过`);
+            continue;
+        }
+        let text;
+        try {
+            text = await readFileText(file);
+        } catch (e) {
+            messages.push(`${file.name}：读取失败（${e instanceof Error ? e.message : String(e)}）`);
+            continue;
+        }
+        entries.push({ path: fileRelativePath(file), text });
+    }
+    if (entries.length === 0) {
+        showFileMessage(spec, messages);
+        toast('没有导入任何内容', 'err');
+        return;
+    }
+    const result = spec.fromFiles(entries);
+    for (const issue of result.warnings || []) messages.push(`${issue.path}：${issue.msg}`);
+    if (!result.ok) {
+        for (const issue of result.issues || []) messages.push(`${issue.path}：${issue.msg}`);
+        showFileMessage(spec, messages);
+        toast('没有导入任何内容', 'err');
+        return;
+    }
+    const items = result.items || [];
+    if (items.length === 0) {
+        messages.push(`没有解析出${spec.itemLabel}`);
+        showFileMessage(spec, messages);
+        toast('没有导入任何内容', 'err');
+        return;
+    }
+    const added = items.map(item => {
+        const normalized = spec.normalizeItem(item);
+        normalized._uid = nextUid();
+        return normalized;
+    });
+    state.items.push(...added);
+    saveStateSoon(spec, state);
+    renderAll(spec, state);
+    messages.unshift(`已从 ${files.length} 个文件导入 ${added.length} 个${spec.itemLabel}`);
+    showFileMessage(spec, messages);
+    toast(`已导入 ${added.length} 个${spec.itemLabel}`, 'ok');
+}
+
 async function importFiles(spec, state, fileList) {
     const files = [...fileList];
     if (files.length === 0) return;
+    // 目录选择器会给 webkitRelativePath；普通文件选择/拖拽没有。
+    // 只有目录导入（或一次选中多份且含 SKILL.md）才走批量解析，保留单文件/多文件逐条导入的旧行为。
+    const hasRelativePath = files.some(file =>
+        typeof file.webkitRelativePath === 'string' && file.webkitRelativePath.trim() !== '');
+    const hasSkillFile = files.some(file => String(file.name || '').toLowerCase() === 'skill.md');
+    if (typeof spec.fromFiles === 'function' && (hasRelativePath || (files.length > 1 && hasSkillFile))) {
+        await importFilesBatch(spec, state, files);
+        return;
+    }
     const added = [];
     const messages = [];
     for (const file of files) {
@@ -521,6 +641,18 @@ function wireFileDrop(spec, state) {
 // ---------------------------------------------------------------- 绑定 & 启动
 
 function wireSpec(spec, state) {
+    // 分区级选项（技能 includeDefaults）：改动即时重算输出并持久化
+    for (const opt of spec.options || []) {
+        const input = $(optionInputId(spec, opt));
+        if (!input || opt.type !== 'checkbox') continue;
+        input.checked = !!state.options[opt.key];
+        input.addEventListener('change', () => {
+            state.options[opt.key] = input.checked;
+            saveStateSoon(spec, state);
+            renderOutput(spec, state);
+        });
+    }
+
     $(`${spec.id}Pretty`).addEventListener('change', (e) => {
         state.pretty = e.target.checked;
         renderOutput(spec, state);
@@ -549,9 +681,18 @@ function wireSpec(spec, state) {
         multiple: true,
         onFiles: (files) => importFiles(spec, state, files),
     }));
+    const dirOpen = $(`${spec.id}DirOpen`);
+    if (dirOpen) {
+        dirOpen.addEventListener('click', () => pickFiles({
+            directory: true,
+            onFiles: (files) => importFiles(spec, state, files),
+        }));
+    }
 
     $(`${spec.id}Reset`).addEventListener('click', () => {
         state.items = defaultItems(spec);
+        state.options = defaultOptions(spec);
+        syncOptionInputs(spec, state);
         saveStateSoon(spec, state);
         renderAll(spec, state);
         toast('已恢复出厂默认', 'ok');

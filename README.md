@@ -65,7 +65,7 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 - **遮蔽 API Key**：导出时换成 `sk-xxxx`，方便截图分享
 - **格式化开关**：输出默认紧凑单行，打开后多行缩进（模型 / 联网两个输出窗口都有）
 - **本地草稿**：自动存 localStorage
-- **角色 / 技能 / MCP / 知识库四个页签**：各自生成一份 JSON；支持文件导入（SKILL.md / Markdown / 文本 / MCP JSON）、JSON 导入导出、MCP 敏感信息遮蔽（详见下文）
+- **角色 / 技能 / MCP / 知识库四个页签**：各自生成一份 JSON；支持文件导入（SKILL.md / 技能目录 / Markdown / 文本 / MCP JSON）、JSON 导入导出、MCP 敏感信息遮蔽（详见下文）
 
 ### 联网搜索分区
 
@@ -89,7 +89,7 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 | 页签 | 粘到插件 | JSON 形态 | 生效方式 |
 | --- | --- | --- | --- |
 | 角色设定 | 角色设定 →「角色设定」 | `{version:1, roles:[{name,prompt}]}` | 重载 JS；`.ai role` 切换 |
-| 技能 | 技能 →「技能列表」 | `{version:1, skills:[{name,description,platform,content}]}` | `.ai skill refresh` |
+| 技能 | 技能 →「技能列表」 | `{version:1, includeDefaults?:false, skills:[{name,description,platform,content,resources?}]}` | 配置修改后自动生效（`.ai skill refresh` 可强制重解析） |
 | MCP | MCP →「MCP服务器」 | **标准 MCP JSON**：`{"mcpServers":{"<服务器名>":{"type":"http","url":"…","headers":{…}}}}`；另支持扩展字段 `platform` | `.ai mcp refresh`（先开「是否启用MCP」） |
 | 知识库 | 知识库 →「知识库配置」 | `{version:1, libraries:[{name,description,platform,content}]}` | `.ai kb refresh` |
 
@@ -99,7 +99,7 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 - `platform` 省略或 `[]` = 所有平台。
 - **每个条目卡片都有「启用」开关**：关闭的条目只留在生成器草稿里，**不会写进生成的 JSON**（不产生 `enabled` 字段）；MCP 同理，关闭 = 直接从 `mcpServers` 里移除。
 - **直接导入文件**：
-  - 技能：标准 `SKILL.md`（`---` frontmatter + 正文，这是其他 agent 通用的技能文件格式），一个文件一个技能；
+  - 技能：标准 `SKILL.md`（`---` frontmatter + 正文，这是其他 agent 通用的技能文件格式），一个文件一个技能；也可以点「导入目录…」选整个技能目录（`SKILL.md` + `references/**`），一次导入多个技能；
   - 知识库：`.md` / `.txt`，库名取第一个 `# 标题`，没有标题时用文件名；描述取正文首段；
   - 角色：`.md` / `.txt`，文件名作为角色名，整份文本作为设定；
   - MCP：`.json`，**要求标准 `mcpServers` 结构**（与 Claude Desktop / Cursor 的 `.mcp.json` 一致）；stdio（`command`）与 SSE 会明确警告并跳过。
@@ -109,6 +109,50 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 - 只支持 Streamable HTTP 的 MCP。
 - 生成器的「启用」是**条目级**开关，只影响该条目是否出现在生成的 JSON 里；「是否启用MCP / 启用知识库记忆 / 会话回收」这类**全局开关**仍由插件配置页单独设置，不写进 JSON。
 - 插件侧这四项是**新的 JSON 键名**，旧的多框配置项不再读取、也不会自动迁移；升级后按生成器重新生成一份粘贴即可。
+
+#### 技能：目录导入、resources 与 includeDefaults
+
+技能页支持两种文件来源：
+
+- **单个 SKILL.md**：拖进左侧、或点「导入文件…」，一个文件一个技能；
+- **技能目录**：点「导入目录…」选一个技能文件夹（`SKILL.md` + 任意 `references/**` 文本文件），整批一次导入。
+
+目录导入规则：
+
+- 每个顶层目录 = 一个技能，目录根必须有 `SKILL.md`（文件名大小写不敏感），用它现有的 frontmatter 取 `name` / `description` / `platform`，正文作 `content`；
+- 同目录其余文本文件按**相对路径**收进 `resources`，例如 `my-skill/references/forms.md` → `"references/forms.md"`；Windows 反斜杠会自动归一化为 `/`；
+- 允许 `.md` `.markdown` `.txt` `.json` `.yaml` `.yml` `.toml` `.csv` `.xml` `.html` `.css` `.js` `.ts` `.py` `.sh` `.ini` `.cfg` `.conf` 以及无扩展名文件；隐藏文件（任一路径段以 `.` 开头）、二进制内容、其余扩展名会跳过，并在「文件导入结果」里逐条提示；单个文件上限沿用 2MB；
+- 单个资源超过 12000 字符、单个技能超过 50 个资源只提示，不阻断生成（仍完整写入 JSON）；同名资源路径跳过后者，结果确定；
+- 没有任何 `SKILL.md` 时拒绝导入，已有内容不动。
+
+`resources` 是**只读参考**：插件只会把文本提供给技能读取（例如 `use_skill` 返回的正文与参考文件），**不执行**里面的任何内容。资源路径必须非空、不超过 120 字符、不能是绝对路径、不能含 `..` 路径段或控制字符；违反时生成器的校验会阻断复制 / 导入，而不是静默丢弃用户输入。
+
+「**自动补入出厂默认技能**」是技能页的分区级复选框（默认勾选）：
+
+- 勾选 = 生成的 JSON **不写** `includeDefaults`，插件按自己的出厂默认补入「录卡」等技能；
+- 取消勾选 = 你可以在生成器里删掉默认技能后再生成，JSON 会写 `"includeDefaults": false`，插件不再补回默认技能。
+
+带资源和关闭默认技能的示例：
+
+```json
+{
+  "version": 1,
+  "includeDefaults": false,
+  "skills": [
+    {
+      "name": "角色卡整理",
+      "description": "按模板整理角色卡",
+      "platform": ["QQ"],
+      "content": "# 角色卡整理\n……",
+      "resources": {
+        "references/forms.md": "# 表单字段\n……"
+      }
+    }
+  ]
+}
+```
+
+导入时若 JSON 顶层带 `includeDefaults`，会同步到复选框；没带时保持当前勾选状态。旧的技能 JSON（无 `resources` / `includeDefaults`）导入后导出仍与改动前逐字一致。
 
 纯逻辑在 `js/domains/*.js`，Node 自检：`node tests/domains-run.mjs`；浏览器交互自检：`tests/domain-e2e-check.html`。
 
@@ -178,12 +222,12 @@ js/web-app.js         联网分区的交互逻辑
 js/domain-app.js      角色 / 技能 / MCP / 知识库的通用交互层
 js/domains/common.js  四个内容分区的共用纯逻辑（JSON / 校验 / SKILL.md frontmatter）
 js/domains/roles.js   角色设定：校验 / 构建 / 导入 / 文件解析
-js/domains/skills.js  技能：校验 / 构建 / 导入 / SKILL.md 解析
+js/domains/skills.js  技能：校验 / 构建 / 导入 / SKILL.md 解析 / 技能目录导入
 js/domains/mcp.js     MCP：标准 mcpServers JSON 的校验 / 构建 / 导入 / 遮蔽
 js/domains/kb.js     知识库：校验 / 构建 / 导入 / Markdown 解析
 js/domains/default-data.js  出厂默认（由 tools/sync-default-data.mjs 生成）
 tests/run.mjs         模型 / 联网逻辑测试（252 项）
-tests/domains-run.mjs 四个内容分区逻辑测试（101 项）
+tests/domains-run.mjs 四个内容分区逻辑测试（172 项）
 tests/web-check.mjs  联网分区逻辑自检（28 项）
 tests/dom-test.html   模型 / 联网浏览器交互测试（207 项）
 tests/domain-e2e-check.html 四个内容分区浏览器交互测试（42 项）

@@ -3,7 +3,9 @@
 import assert from 'node:assert/strict';
 
 import { rolesSpec, roleFromFile } from '../js/domains/roles.js';
-import { skillsSpec, skillFromFile } from '../js/domains/skills.js';
+import {
+    buildSkills, parseSkillsImport, skillFromFile, skillFromFiles, skillsSpec, validateSkills,
+} from '../js/domains/skills.js';
 import { mcpSpec, parseMcpDocument, maskMcp } from '../js/domains/mcp.js';
 import { kbSpec, kbFromFile } from '../js/domains/kb.js';
 import { DOMAIN_SPECS } from '../js/domains/index.js';
@@ -253,6 +255,213 @@ console.log('\n=== 字符串转义（引号 / 反斜杠 / 换行 / 控制字符 
     const handmadeImported = skillsSpec.parseImport(handmade);
     check('手写转义 JSON 可导入', handmadeImported.ok, JSON.stringify(handmadeImported.issues));
     eq('手写转义 JSON 内容正确', handmadeImported.items[0].content, '第一行\n第二行 "引号" \\反斜杠\t制表');
+}
+
+console.log('\n=== 技能：includeDefaults 与 resources ===');
+{
+    const legacyItems = [
+        { name: 'S', description: '', platform: [], content: '正文' },
+        { name: 'T', description: '描述', platform: ['QQ'], content: '正文2' },
+    ];
+    eq('技能：空 resources / 缺省 options 输出与旧版逐字一致',
+        JSON.stringify(buildSkills(legacyItems)),
+        '{"version":1,"skills":[{"name":"S","content":"正文"},{"name":"T","description":"描述","platform":["QQ"],"content":"正文2"}]}');
+    eq('技能：spec.build 缺省输出与 buildSkills 一致',
+        JSON.stringify(skillsSpec.build(legacyItems)), JSON.stringify(buildSkills(legacyItems)));
+
+    eq('技能：newSkill 带空 resources', JSON.stringify(skillsSpec.newItem().resources), '{}');
+
+    const withEmptyResources = buildSkills([
+        { name: 'S', description: '', platform: [], content: '正文', resources: {} },
+    ]);
+    eq('技能：空 resources 不输出', JSON.stringify(withEmptyResources), '{"version":1,"skills":[{"name":"S","content":"正文"}]}');
+
+    const off = buildSkills(legacyItems, { includeDefaults: false });
+    eq('技能：includeDefaults:false 输出且位于 skills 前',
+        JSON.stringify(off),
+        '{"version":1,"includeDefaults":false,"skills":[{"name":"S","content":"正文"},{"name":"T","description":"描述","platform":["QQ"],"content":"正文2"}]}');
+    eq('技能：includeDefaults:true 不输出',
+        JSON.stringify(buildSkills(legacyItems, { includeDefaults: true })), JSON.stringify(buildSkills(legacyItems)));
+    eq('技能：includeDefaults 缺省不输出',
+        JSON.stringify(buildSkills(legacyItems, {})), JSON.stringify(buildSkills(legacyItems)));
+    eq('技能：spec.build 第二参生效',
+        skillsSpec.build(legacyItems, { includeDefaults: false }).includeDefaults, false);
+
+    const withResources = buildSkills([{
+        name: 'S', description: '', platform: [], content: '正文',
+        resources: { 'references/forms.md': '# 表格\n内容', 'notes.txt': '备注' },
+    }]);
+    eq('技能：resources 输出（在 content 之后）',
+        JSON.stringify(withResources),
+        JSON.stringify({
+            version: 1,
+            skills: [{
+                name: 'S', content: '正文',
+                resources: { 'references/forms.md': '# 表格\n内容', 'notes.txt': '备注' },
+            }],
+        }));
+
+    const advanced = {
+        version: 1,
+        includeDefaults: false,
+        skills: [{
+            name: 'S', description: '描述', platform: ['QQ'], content: '# 正文\n内容',
+            resources: { 'references/forms.md': '# 表格', 'notes.txt': '备注' },
+        }],
+    };
+    const advancedText = JSON.stringify(advanced);
+    const imported = parseSkillsImport(advancedText);
+    check('技能：带 includeDefaults/resources 导入成功', imported.ok, JSON.stringify(imported.issues));
+    eq('技能：导入带出 options.includeDefaults', imported.options?.includeDefaults, false);
+    eq('技能：includeDefaults + resources 逐字往返',
+        JSON.stringify(buildSkills(imported.items, imported.options)), advancedText);
+
+    const plain = parseSkillsImport('{"version":1,"skills":[]}');
+    check('技能：输入没有 includeDefaults 时不返回 options', plain.ok && !('options' in plain));
+    const offOnly = parseSkillsImport('{"version":1,"includeDefaults":false,"skills":[]}');
+    eq('技能：只有 includeDefaults 也逐字往返',
+        JSON.stringify(buildSkills(offOnly.items, offOnly.options)), '{"version":1,"includeDefaults":false,"skills":[]}');
+
+    check('技能：卡片显示资源数量', skillsSpec.cardMeta({
+        name: 'S', platform: [], content: 'x', resources: { 'a.md': '1', 'b.md': '2' },
+    }).includes('2 个资源'));
+
+    const option = (skillsSpec.options || []).find(o => o.key === 'includeDefaults');
+    check('技能 spec 定义 includeDefaults 复选框', !!option && option.type === 'checkbox' && option.default === true && !!option.note);
+    check('技能 spec 暴露 fromFiles', typeof skillsSpec.fromFiles === 'function');
+    check('技能 spec 保留 fromFile', typeof skillsSpec.fromFile === 'function');
+}
+
+console.log('\n=== 技能：非法 resources / includeDefaults 必须拒绝 ===');
+{
+    const cases = [
+        ['resources 是非对象', { version: 1, skills: [{ name: 'S', content: 'C', resources: [] }] }],
+        ['resources 路径穿越', { version: 1, skills: [{ name: 'S', content: 'C', resources: { '../secret.md': 'x' } }] }],
+        ['resources 反斜杠路径穿越', { version: 1, skills: [{ name: 'S', content: 'C', resources: { 'references\\..\\secret.md': 'x' } }] }],
+        ['resources 绝对路径', { version: 1, skills: [{ name: 'S', content: 'C', resources: { '/etc/passwd': 'x' } }] }],
+        ['resources Windows 绝对路径', { version: 1, skills: [{ name: 'S', content: 'C', resources: { 'C:\\secret.md': 'x' } }] }],
+        ['resources 空 key', { version: 1, skills: [{ name: 'S', content: 'C', resources: { '': 'x' } }] }],
+        ['resources key 超长', { version: 1, skills: [{ name: 'S', content: 'C', resources: { ['a'.repeat(121)]: 'x' } }] }],
+        ['resources key 含控制字符', { version: 1, skills: [{ name: 'S', content: 'C', resources: { 'a\u0000b.md': 'x' } }] }],
+        ['resources 空 value', { version: 1, skills: [{ name: 'S', content: 'C', resources: { 'a.md': '   ' } }] }],
+        ['resources value 非字符串', { version: 1, skills: [{ name: 'S', content: 'C', resources: { 'a.md': 42 } }] }],
+        ['includeDefaults 非布尔', { version: 1, includeDefaults: 'no', skills: [] }],
+    ];
+    for (const [name, value] of cases) {
+        const result = skillsSpec.parseImport(JSON.stringify(value));
+        check(`拒绝：${name}`, !result.ok, JSON.stringify(result.issues));
+    }
+
+    const long = validateSkills([{
+        name: 'S', description: '', platform: [], content: 'C',
+        resources: { 'a.md': 'x'.repeat(12001) },
+    }]);
+    eq('技能：超长资源只 warning 不阻断', long.problems.length, 0);
+    check('技能：超长资源有 12000 提示', long.warnings.some(w => /12000/.test(w.msg)));
+
+    const many = {};
+    for (let i = 0; i < 51; i++) many[`r${i}.md`] = 'x';
+    const manyResult = validateSkills([{ name: 'S', description: '', platform: [], content: 'C', resources: many }]);
+    eq('技能：51 个资源不阻断', manyResult.problems.length, 0);
+    check('技能：超过 50 个资源有提示', manyResult.warnings.some(w => /50/.test(w.msg)));
+
+    const disabled = validateSkills([{
+        name: '', description: '', platform: [], content: '', enabled: false,
+        resources: { '/abs.md': 'x' },
+    }]);
+    eq('技能：停用条目的非法 resources 不参与校验', disabled.problems.length, 0);
+}
+
+console.log('\n=== 技能目录导入（skillFromFiles） ===');
+{
+    const single = skillFromFiles([
+        { path: 'my-skill/SKILL.md', text: '---\nname: 目录技能\ndescription: 来自目录\nplatform: [QQ]\n---\n# 正文\n内容' },
+        { path: 'my-skill/references/forms.md', text: '# 表单\n内容' },
+        { path: 'my-skill/notes.txt', text: '备注' },
+    ]);
+    check('目录导入：单目录成功', single.ok, JSON.stringify(single.issues));
+    eq('目录导入：1 个技能', single.items.length, 1);
+    eq('目录导入：name', single.items[0].name, '目录技能');
+    eq('目录导入：description', single.items[0].description, '来自目录');
+    eq('目录导入：platform', JSON.stringify(single.items[0].platform), JSON.stringify(['QQ']));
+    eq('目录导入：resources 路径（相对根目录，保持输入顺序）',
+        JSON.stringify(Object.keys(single.items[0].resources)),
+        JSON.stringify(['references/forms.md', 'notes.txt']));
+    eq('目录导入：resources 内容', single.items[0].resources['references/forms.md'], '# 表单\n内容');
+    eq('目录导入：item 结构',
+        JSON.stringify(Object.keys(single.items[0])),
+        JSON.stringify(['name', 'description', 'platform', 'content', 'resources']));
+
+    const multi = skillFromFiles([
+        { path: 'b/SKILL.md', text: '---\nname: B\n---\n正文 B' },
+        { path: 'a/SKILL.md', text: '---\nname: A\n---\n正文 A' },
+        { path: 'a/ref/x.md', text: 'X' },
+    ]);
+    check('目录导入：多个顶层目录成功', multi.ok, JSON.stringify(multi.issues));
+    eq('目录导入：多目录保持输入顺序', JSON.stringify(multi.items.map(x => x.name)), JSON.stringify(['B', 'A']));
+    eq('目录导入：资源只归属自己的目录', JSON.stringify(multi.items[1].resources), JSON.stringify({ 'ref/x.md': 'X' }));
+    eq('目录导入：无资源目录给空对象', JSON.stringify(multi.items[0].resources), '{}');
+
+    const win = skillFromFiles([
+        { path: 'win-skill\\SKILL.md', text: '---\nname: Win\n---\n正文' },
+        { path: 'win-skill\\references\\forms.md', text: '# F' },
+    ]);
+    check('目录导入：Windows 反斜杠归一化', win.ok, JSON.stringify(win.issues));
+    eq('目录导入：反斜杠资源键', JSON.stringify(Object.keys(win.items[0].resources)), JSON.stringify(['references/forms.md']));
+
+    const upper = skillFromFiles([{ path: 'u/skill.MD', text: '---\nname: Upper\n---\n正文' }]);
+    check('目录导入：SKILL.md 大小写不敏感', upper.ok, JSON.stringify(upper.issues));
+    eq('目录导入：大小写不敏感取到 name', upper.items[0].name, 'Upper');
+
+    const none = skillFromFiles([{ path: 'my-skill/README.md', text: '只有说明' }]);
+    check('目录导入：没有 SKILL.md 拒绝', !none.ok);
+    eq('目录导入：拒绝路径固定为 目录', none.issues?.[0]?.path, '目录');
+    eq('目录导入：拒绝消息', none.issues?.[0]?.msg, '未找到 SKILL.md');
+    eq('目录导入：只有一条拒绝原因', none.issues?.length, 1);
+
+    const filtered = skillFromFiles([
+        { path: 's/SKILL.md', text: '---\nname: S\n---\n正文' },
+        { path: 's/.hidden.md', text: '隐藏文件' },
+        { path: 's/.git/config', text: 'git 配置' },
+        { path: 's/logo.png', text: 'PNG' },
+        { path: 's/Makefile', text: 'all:\n\techo hi' },
+        { path: 's/blob.md', text: 'a\u0000b' },
+    ]);
+    check('目录导入：隐藏/不支持/二进制混合时仍成功', filtered.ok, JSON.stringify(filtered.issues));
+    eq('目录导入：只保留允许的文本资源', JSON.stringify(Object.keys(filtered.items[0].resources)), JSON.stringify(['Makefile']));
+    check('目录导入：不支持扩展名有 warning', (filtered.warnings || []).some(w => /不支持/.test(w.msg) && /\.png/.test(w.msg)));
+    check('目录导入：二进制内容有 warning', (filtered.warnings || []).some(w => /二进制/.test(w.msg)));
+
+    const longText = 'x'.repeat(12001);
+    const longImport = skillFromFiles([
+        { path: 's/SKILL.md', text: '---\nname: S\n---\n正文' },
+        { path: 's/references/long.md', text: longText },
+    ]);
+    check('目录导入：超长资源仍保留', longImport.ok && longImport.items[0].resources['references/long.md'].length === 12001);
+    check('目录导入：超长资源有 12000 warning', (longImport.warnings || []).some(w => /12000/.test(w.msg)));
+
+    const manyFiles = [{ path: 's/SKILL.md', text: '---\nname: S\n---\n正文' }];
+    for (let i = 0; i < 51; i++) manyFiles.push({ path: `s/r${String(i).padStart(2, '0')}.md`, text: 'x' });
+    const manyImport = skillFromFiles(manyFiles);
+    check('目录导入：51 个资源仍成功', manyImport.ok, JSON.stringify(manyImport.issues));
+    eq('目录导入：51 个资源全部保留', Object.keys(manyImport.items[0].resources).length, 51);
+    check('目录导入：超过 50 个资源有 warning', (manyImport.warnings || []).some(w => /50/.test(w.msg)));
+
+    const dup = skillFromFiles([
+        { path: 's/SKILL.md', text: '---\nname: S\n---\n正文' },
+        { path: 's/a.md', text: '第一份' },
+        { path: 's/a.md', text: '第二份' },
+    ]);
+    check('目录导入：同名资源仍成功', dup.ok, JSON.stringify(dup.issues));
+    eq('目录导入：同名资源保留先出现的一份', dup.items[0].resources['a.md'], '第一份');
+    check('目录导入：同名资源有 warning', (dup.warnings || []).some(w => /重复/.test(w.msg)));
+
+    const stray = skillFromFiles([
+        { path: 'a/SKILL.md', text: '---\nname: A\n---\n正文' },
+        { path: 'b/notes.md', text: '不是技能' },
+    ]);
+    check('目录导入：缺 SKILL.md 的子目录跳过', stray.ok && stray.items.length === 1);
+    check('目录导入：被跳过的子目录有 warning', (stray.warnings || []).some(w => /目录 b/.test(w.path)));
 }
 
 console.log(`\n===== ${pass} 通过 / ${fail} 失败 =====`);
