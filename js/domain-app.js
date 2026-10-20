@@ -4,7 +4,7 @@
 // 差异全部收敛在 js/domains/*.js 的 spec 里；本文件只做 DOM 与通用行为，避免复制四份。
 import { DOMAIN_SPECS } from './domains/index.js';
 import {
-    clone, formatPlatform, parsePlatform, stringifyConfig, withUids,
+    clone, formatPlatform, parsePlatform, shouldBatchImport, stringifyConfig, withUids,
 } from './domains/common.js';
 import { initTabs, registerView } from './tabs.js';
 import {
@@ -572,11 +572,9 @@ async function importFiles(spec, state, fileList) {
     const files = [...fileList];
     if (files.length === 0) return;
     // 目录选择器会给 webkitRelativePath；普通文件选择/拖拽没有。
-    // 只有目录导入（或一次选中多份且含 SKILL.md）才走批量解析，保留单文件/多文件逐条导入的旧行为。
-    const hasRelativePath = files.some(file =>
-        typeof file.webkitRelativePath === 'string' && file.webkitRelativePath.trim() !== '');
-    const hasSkillFile = files.some(file => String(file.name || '').toLowerCase() === 'skill.md');
-    if (typeof spec.fromFiles === 'function' && (hasRelativePath || (files.length > 1 && hasSkillFile))) {
+    // 只有目录导入才走批量解析：普通多选/拖拽仍逐文件导入（旧行为），
+    // 否则多个同名 SKILL.md 会被当成同一个根目录、只保留第一个。
+    if (typeof spec.fromFiles === 'function' && shouldBatchImport(files)) {
         await importFilesBatch(spec, state, files);
         return;
     }

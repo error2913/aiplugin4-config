@@ -9,6 +9,7 @@ import {
 import { mcpSpec, parseMcpDocument, maskMcp } from '../js/domains/mcp.js';
 import { kbSpec, kbFromFile } from '../js/domains/kb.js';
 import { DOMAIN_SPECS } from '../js/domains/index.js';
+import { shouldBatchImport } from '../js/domains/common.js';
 import { DEFAULT_KB, DEFAULT_MCP, DEFAULT_ROLES, DEFAULT_SKILLS } from '../js/domains/default-data.js';
 
 let pass = 0;
@@ -345,12 +346,26 @@ console.log('\n=== 技能：非法 resources / includeDefaults 必须拒绝 ==='
         ['resources key 含控制字符', { version: 1, skills: [{ name: 'S', content: 'C', resources: { 'a\u0000b.md': 'x' } }] }],
         ['resources 空 value', { version: 1, skills: [{ name: 'S', content: 'C', resources: { 'a.md': '   ' } }] }],
         ['resources value 非字符串', { version: 1, skills: [{ name: 'S', content: 'C', resources: { 'a.md': 42 } }] }],
+        ['resources 空段', { version: 1, skills: [{ name: 'S', content: 'C', resources: { 'a//b.md': 'x' } }] }],
+        ['resources ./', { version: 1, skills: [{ name: 'S', content: 'C', resources: { './a.md': 'x' } }] }],
+        ['resources 目录结尾', { version: 1, skills: [{ name: 'S', content: 'C', resources: { 'refs/': 'x' } }] }],
+        ['resources 盘符相对路径', { version: 1, skills: [{ name: 'S', content: 'C', resources: { 'C:secret.md': 'x' } }] }],
+        ['resources 归一化后重复', { version: 1, skills: [{ name: 'S', content: 'C', resources: { 'refs\\a.md': 'x', 'refs/a.md': 'y' } }] }],
         ['includeDefaults 非布尔', { version: 1, includeDefaults: 'no', skills: [] }],
     ];
     for (const [name, value] of cases) {
         const result = skillsSpec.parseImport(JSON.stringify(value));
         check(`拒绝：${name}`, !result.ok, JSON.stringify(result.issues));
     }
+
+    const nullInclude = skillsSpec.parseImport('{"version":1,"includeDefaults":null,"skills":[]}');
+    check('includeDefaults:null 视为缺省（与插件一致）', nullInclude.ok && !('options' in nullInclude));
+
+    const normalizedBuild = buildSkills([{
+        name: 'S', description: '', platform: [], content: 'C',
+        resources: { 'refs\\a.md': 'x' },
+    }]);
+    eq('技能：build 归一化资源路径', JSON.stringify(Object.keys(normalizedBuild.skills[0].resources)), JSON.stringify(['refs/a.md']));
 
     const long = validateSkills([{
         name: 'S', description: '', platform: [], content: 'C',
@@ -370,6 +385,15 @@ console.log('\n=== 技能：非法 resources / includeDefaults 必须拒绝 ==='
         resources: { '/abs.md': 'x' },
     }]);
     eq('技能：停用条目的非法 resources 不参与校验', disabled.problems.length, 0);
+}
+
+console.log('\n=== 技能文件导入路由 ===');
+{
+    check('导入路由：普通单文件不批量', !shouldBatchImport([{ name: 'SKILL.md' }]));
+    check('导入路由：多个同名 SKILL.md 不批量（逐文件导入）',
+        !shouldBatchImport([{ name: 'SKILL.md' }, { name: 'SKILL.md' }]));
+    check('导入路由：目录选择器（webkitRelativePath）才批量',
+        shouldBatchImport([{ name: 'SKILL.md', webkitRelativePath: 'my-skill/SKILL.md' }]));
 }
 
 console.log('\n=== 技能目录导入（skillFromFiles） ===');
@@ -401,6 +425,21 @@ console.log('\n=== 技能目录导入（skillFromFiles） ===');
     eq('目录导入：多目录保持输入顺序', JSON.stringify(multi.items.map(x => x.name)), JSON.stringify(['B', 'A']));
     eq('目录导入：资源只归属自己的目录', JSON.stringify(multi.items[1].resources), JSON.stringify({ 'ref/x.md': 'X' }));
     eq('目录导入：无资源目录给空对象', JSON.stringify(multi.items[0].resources), '{}');
+
+    // 根级 SKILL.md + references/**（没有顶层目录名）：资源并入根技能，不丢
+    const rootRes = skillFromFiles([
+        { path: 'SKILL.md', text: '---\nname: 根技能\n---\n正文' },
+        { path: 'references/forms.md', text: 'F' },
+        { path: 'notes.txt', text: 'N' },
+    ]);
+    check('目录导入：根级 SKILL.md + 资源成功', rootRes.ok, JSON.stringify(rootRes.issues));
+    eq('目录导入：根级技能名', rootRes.items[0].name, '根技能');
+    eq('目录导入：根级资源按完整相对路径', JSON.stringify(Object.keys(rootRes.items[0].resources)), JSON.stringify(['notes.txt', 'references/forms.md']));
+
+    // 无 name frontmatter 时用顶层目录名兜底（避免多个 SKILL.md 都叫 SKILL）
+    const noName = skillFromFiles([{ path: 'my-dir/SKILL.md', text: '---\nplatform: [QQ]\n---\n正文' }]);
+    check('目录导入：无 name 的 SKILL.md 成功', noName.ok, JSON.stringify(noName.issues));
+    eq('目录导入：无 name 用目录名兜底', noName.items[0].name, 'my-dir');
 
     const win = skillFromFiles([
         { path: 'win-skill\\SKILL.md', text: '---\nname: Win\n---\n正文' },

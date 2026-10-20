@@ -54,13 +54,21 @@ export function normalizeSkill(item, problems, path) {
     };
 }
 
-/** 资源路径规则：非空、≤120、不能是绝对路径、不能含 .. 路径段或控制字符 */
+/** 归一化资源路径：统一用 /，去掉首尾空白（与插件侧一致） */
+function normalizeResourceKey(key) {
+    return String(key ?? '').trim().replace(/\\/g, '/');
+}
+
+/** 资源路径规则：非空、≤120、相对路径、无空段/./..、无控制字符（与插件侧一致） */
 function resourceKeyProblem(key) {
-    if (!key || !key.trim()) return '资源路径不能为空';
-    if (key.length > MAX_RESOURCE_KEY_CHARS) return `资源路径不能超过 ${MAX_RESOURCE_KEY_CHARS} 字符`;
-    if (/^[\\/]/.test(key) || /^[A-Za-z]:[\\/]/.test(key)) return '资源路径不能是绝对路径';
-    if (/[\u0000-\u001F\u007F]/.test(key)) return '资源路径不能含控制字符';
-    if (key.split(/[\\/]/).some(segment => segment === '..')) return '资源路径不能含 .. 路径段';
+    const normalized = normalizeResourceKey(key);
+    if (!normalized) return '资源路径不能为空';
+    if (normalized.length > MAX_RESOURCE_KEY_CHARS) return `资源路径不能超过 ${MAX_RESOURCE_KEY_CHARS} 字符`;
+    if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) return '资源路径不能是绝对路径';
+    if (/[\u0000-\u001F\u007F]/.test(normalized)) return '资源路径不能含控制字符';
+    if (normalized.split('/').some(segment => segment === '' || segment === '.' || segment === '..')) {
+        return '资源路径不能含空段 / . / ..';
+    }
     return '';
 }
 
@@ -97,10 +105,16 @@ export function validateSkills(items) {
                 problems.push(issue(`${path}.resources`, 'resources 必须是对象（相对路径 → 文本内容）'));
             } else {
                 const entries = Object.entries(item.resources);
+                const seenKeys = new Set();
                 for (const [key, value] of entries) {
                     const keyPath = `${path}.resources[${JSON.stringify(key)}]`;
                     const keyProblem = resourceKeyProblem(key);
                     if (keyProblem) problems.push(issue(keyPath, keyProblem));
+                    const normalizedKey = normalizeResourceKey(key);
+                    if (normalizedKey && seenKeys.has(normalizedKey)) {
+                        problems.push(issue(keyPath, '资源路径归一化后重复'));
+                    }
+                    seenKeys.add(normalizedKey);
                     if (typeof value !== 'string' || !value.trim()) {
                         problems.push(issue(keyPath, '资源内容必须是非空字符串'));
                     } else if (value.length > MAX_RESOURCE_CHARS) {
@@ -128,7 +142,18 @@ export function buildSkills(items, options = {}) {
         if (item.description && item.description.trim()) skill.description = item.description.trim();
         if (Array.isArray(item.platform) && item.platform.length > 0) skill.platform = item.platform;
         skill.content = item.content;
-        if (resourceCount(item) > 0) skill.resources = { ...item.resources };
+        if (resourceCount(item) > 0) {
+            const resources = {};
+            for (const [key, value] of Object.entries(item.resources)) {
+                const normalizedKey = normalizeResourceKey(key);
+                if (!normalizedKey) continue;
+                // 用 defineProperty 而不是 obj[key]：资源名可能是 __proto__ 这类特殊键
+                Object.defineProperty(resources, normalizedKey, {
+                    value, enumerable: true, configurable: true, writable: true,
+                });
+            }
+            if (Object.keys(resources).length > 0) skill.resources = resources;
+        }
         return skill;
     });
     return out;
@@ -139,8 +164,8 @@ export function parseSkillsImport(text) {
     if (!parsed.ok) return { ok: false, issues: parsed.issues };
     const problems = [];
     validateVersion(parsed.value.version, problems);
-    // includeDefaults：缺失 = 不设置；存在时必须为布尔
-    const hasIncludeDefaults = parsed.value.includeDefaults !== undefined;
+    // includeDefaults：缺失/null = 不设置；存在时必须为布尔
+    const hasIncludeDefaults = parsed.value.includeDefaults !== undefined && parsed.value.includeDefaults !== null;
     if (hasIncludeDefaults && typeof parsed.value.includeDefaults !== 'boolean') {
         problems.push(issue('$.includeDefaults', 'includeDefaults 必须是布尔值'));
     }
@@ -154,8 +179,9 @@ export function parseSkillsImport(text) {
     return imported;
 }
 
-/** .md 文件 → 一条技能；SKILL.md 的 frontmatter 是跨 agent 标准格式，继续支持 */
-export function skillFromFile(filename, text) {
+/** .md 文件 → 一条技能；SKILL.md 的 frontmatter 是跨 agent 标准格式，继续支持。
+ *  fallbackName 用于目录导入时以顶层目录名兜底技能名（避免多个 SKILL.md 都叫 SKILL）。 */
+export function skillFromFile(filename, text, fallbackName) {
     const raw = normalizeText(text).trim();
     const file = String(filename ?? '').split(/[\\/]/).pop() || '(未命名)';
     if (!raw) return { ok: false, issues: [issue(`文件 ${file}`, '文件为空')] };
@@ -170,11 +196,11 @@ export function skillFromFile(filename, text) {
         description = fm.meta.description || '';
         platform = fm.meta.platform || [];
         content = fm.body;
-        if (!name) warnings.push(issue(`文件 ${file}`, 'frontmatter 没有 name，已用文件名代替'));
+        if (!name) warnings.push(issue(`文件 ${file}`, 'frontmatter 没有 name，已用目录名/文件名代替'));
     } else {
         warnings.push(issue(`文件 ${file}`, '没有 --- frontmatter，已把整份内容作为技能正文（建议补 name/description）'));
     }
-    if (!name) name = baseName(filename);
+    if (!name) name = String(fallbackName || '').trim() || baseName(filename);
     if (!name) return { ok: false, issues: [issue(`文件 ${file}`, '无法确定技能名')] };
     if (!content) return { ok: false, issues: [issue(`文件 ${file}`, '技能正文为空')] };
     return { ok: true, item: { name, description, platform, content }, warnings };
@@ -232,16 +258,35 @@ export function skillFromFiles(files) {
             text: normalizeText(entry && entry.text),
         });
     }
-    const hasSkillFile = [...groups.values()].some(list =>
-        list.some(file => !file.relative.includes('/') && fileName(file.path).toLowerCase() === 'skill.md'));
+    const isSkillFile = file =>
+        !file.relative.includes('/') && fileName(file.path).toLowerCase() === 'skill.md';
+    const hasSkillFile = [...groups.values()].some(list => list.some(isSkillFile));
     if (!hasSkillFile) return { ok: false, issues: [issue('目录', '未找到 SKILL.md')] };
+
+    // 根级 SKILL.md + references/**（浏览器给了相对路径但没有顶层目录）也是合法单技能输入：
+    // 只有根组含 SKILL.md 时，把其余「无 SKILL.md 的顶层目录」作为根技能的资源并入，
+    // 避免 references/forms.md 被误判为「缺少 SKILL.md 的子目录」而丢失。
+    const rootGroup = groups.get('');
+    const rootSkillFiles = rootGroup ? rootGroup.filter(isSkillFile) : [];
+    const otherSkillGroups = [...groups.keys()].filter(top =>
+        top !== '' && (groups.get(top) || []).some(isSkillFile));
+    if (rootSkillFiles.length === 1 && otherSkillGroups.length === 0) {
+        for (const top of [...groups.keys()]) {
+            if (top === '') continue;
+            const list = groups.get(top) || [];
+            for (const file of list) {
+                // 并入根组后，资源键使用完整相对路径（references/forms.md）
+                rootGroup.push({ ...file, relative: file.path });
+            }
+            groups.delete(top);
+        }
+    }
 
     const items = [];
     const issues = [];
     for (const top of groups.keys()) {
         const list = groups.get(top);
-        const skillFiles = list
-            .filter(file => !file.relative.includes('/') && fileName(file.path).toLowerCase() === 'skill.md');
+        const skillFiles = list.filter(isSkillFile);
         if (skillFiles.length === 0) {
             // 根目录散文件（浏览器只给了 file.name）不是技能；有目录名的给出提示
             if (top) warnings.push(issue(`目录 ${top}`, '未找到 SKILL.md，已跳过'));
@@ -251,7 +296,7 @@ export function skillFromFiles(files) {
         if (skillFiles.length > 1) {
             warnings.push(issue(`目录 ${top || '.'}`, `找到 ${skillFiles.length} 个 SKILL.md，仅使用 ${primary.relative}`));
         }
-        const parsed = skillFromFile(primary.path, primary.text);
+        const parsed = skillFromFile(primary.path, primary.text, top || '');
         warnings.push(...(parsed.warnings || []));
         if (!parsed.ok) {
             issues.push(...(parsed.issues || []));
@@ -322,7 +367,7 @@ export const skillsSpec = {
     fileBase: 'aiplugin4-技能配置',
     storageKey: 'aiplugin4-config-skills-draft',
     accept: '.md,.markdown,.json',
-    fileHint: '拖入 SKILL.md 或普通技能说明 .md；目录导入点「导入目录…」（SKILL.md + references/**）',
+    fileHint: '拖入 SKILL.md 或普通技能说明 .md；目录导入点「导入目录…」（SKILL.md + 同目录文本资源，建议 references/）',
     emptyText: '还没有技能，点「+ 添加技能」、拖入 SKILL.md，或点「导入目录…」',
     fields: [
         { key: 'name', label: '技能名', type: 'text', required: true, placeholder: '如：录卡', note: 'AI 通过 use_skill 按名称调用' },
@@ -354,6 +399,6 @@ export const skillsSpec = {
         '点「+ 添加技能」或卡片上的「编辑」；也可以把 SKILL.md 文件拖进左侧。',
         '技能目录（SKILL.md + references/**）用「导入目录…」一次导入；其它文本文件会作为只读参考资源，插件不执行。',
         '点「复制全部」，粘到海豹 → JS插件 → 插件设置 → aiplugin4 →「技能」→「技能列表」。',
-        '粘完用 .ai skill refresh 立即生效（或重载 JS）。',
+        '粘完下一条消息自动生效；也可用 .ai skill refresh 强制重解析。',
     ],
 };
