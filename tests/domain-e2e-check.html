@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"><title>角色 / 技能 / MCP / 知识库交互测试</title></head>
+<head><meta charset="UTF-8"><title>角色 / 技能 / MCP / 知识库 / 事件触发交互测试</title></head>
 <body>
-<h1>角色 / 技能 / MCP / 知识库交互测试</h1>
+<h1>角色 / 技能 / MCP / 知识库 / 事件触发交互测试</h1>
 <ol id="results"></ol>
 <iframe id="frame" src="/index.html" width="1500" height="950"></iframe>
 <script>
@@ -48,7 +48,7 @@ f.onload = async () => {
         await sleep(80);
 
         // ---------- 页签与默认内容 ----------
-        check('6 个页签', qa('.view-tab').length === 6, qa('.view-tab').length);
+        check('7 个页签', qa('.view-tab').length === 7, qa('.view-tab').length);
         check('默认显示模型配置', shown(d.getElementById('modelLayout')));
         check('内容分区默认隐藏', !shown(d.getElementById('rolesLayout')) && !shown(d.getElementById('skillsLayout')));
 
@@ -225,9 +225,54 @@ f.onload = async () => {
         const kbAfter = json('kbPreview');
         check('知识库可新增', kbAfter.libraries.some(l => l.name === '新库'), JSON.stringify(kbAfter.libraries.map(l => l.name)));
 
+        // ---------- 事件触发：切页签 / 添加规则 / 复制可用 / 停用不写入 ----------
+        await clickTab('eventTrigger');
+        check('切到事件触发', shown(d.getElementById('eventTriggerLayout')) && !shown(d.getElementById('kbLayout')));
+        check('事件触发默认 0 条', cardCount('eventTrigger') === 0, cardCount('eventTrigger'));
+        const etDefault = json('eventTriggerPreview');
+        check('事件触发默认输出空规则',
+            etDefault.version === 1 && etDefault.rules.length === 0, JSON.stringify(etDefault));
+
+        d.querySelector('#eventTriggerCards .dcard-add').click();
+        await sleep(30);
+        check('打开事件触发编辑面板', shown(d.getElementById('domainPanel')));
+        const etName = d.getElementById('domainField_eventTrigger_name');
+        const etOn = d.getElementById('domainField_eventTrigger_on');
+        const etMatch = d.getElementById('domainField_eventTrigger_match');
+        const etPrompt = d.getElementById('domainField_eventTrigger_prompt');
+        etName.value = '入群欢迎';
+        etName.dispatchEvent(new w.Event('input', { bubbles: true }));
+        etOn.value = 'group_increase';
+        etOn.dispatchEvent(new w.Event('input', { bubbles: true }));
+        etMatch.value = '[{"field":"operator_id","regex":".+"}]';
+        etPrompt.value = '新成员 {user_id} 入群了。请以角色身份用一句话欢迎。';
+        etPrompt.dispatchEvent(new w.Event('input', { bubbles: true }));
+        d.getElementById('domainPanelSave').click();
+        await sleep(50);
+        check('事件触发规则 +1', cardCount('eventTrigger') === 1, cardCount('eventTrigger'));
+        const etAfter = json('eventTriggerPreview');
+        check('事件触发输出规则',
+            etAfter.rules.length === 1 &&
+            etAfter.rules[0]?.name === '入群欢迎' &&
+            etAfter.rules[0]?.on === 'group_increase' &&
+            etAfter.rules[0]?.match?.[0]?.field === 'operator_id' &&
+            etAfter.rules[0]?.match?.[0]?.regex === '.+',
+            JSON.stringify(etAfter));
+        check('事件触发复制按钮可用', !d.getElementById('eventTriggerCopy').disabled);
+
+        const etToggle = d.querySelector('#eventTriggerCards .dcard input[type="checkbox"]');
+        check('事件触发卡片有启用开关', !!etToggle);
+        etToggle.checked = false;
+        etToggle.dispatchEvent(new w.Event('change', { bubbles: true }));
+        await sleep(40);
+        check('停用事件触发规则后输出为空', json('eventTriggerPreview').rules.length === 0);
+        etToggle.checked = true;
+        etToggle.dispatchEvent(new w.Event('change', { bubbles: true }));
+        await sleep(40);
+
         // ---------- 深链 / 页签按钮状态 ----------
         check('当前页签按钮 aria-selected',
-            d.querySelector('[data-view="kb"]').getAttribute('aria-selected') === 'true');
+            d.querySelector('[data-view="eventTrigger"]').getAttribute('aria-selected') === 'true');
     } catch (e) {
         check('测试过程未抛异常', false, e instanceof Error ? e.stack : String(e));
     }

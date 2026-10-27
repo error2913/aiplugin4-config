@@ -1,11 +1,11 @@
 # aiplugin4 配置生成器
 
-给 [aiplugin4](https://github.com/error2913/aiplugin4)（SealDice AI 插件）用的**模型 / 联网 / 角色 / 技能 / MCP / 知识库配置可视化生成器**。
+给 [aiplugin4](https://github.com/error2913/aiplugin4)（SealDice AI 插件）用的**模型 / 联网 / 角色 / 技能 / MCP / 知识库 / 事件触发配置可视化生成器**。
 
 点选供应商 → 填 API Key → 选模型（或选搜索方言 / 编辑条目）→ 复制生成的 JSON 粘进海豹，不用手写配置。
 
 > **零依赖纯静态页面**，双击 `index.html` 即可跑（建议用 `node serve.mjs`，见「用法」）。
-> 产出 **v5 JSON 模型配置**、**联网配置 JSON**，以及**角色设定 / 技能 / MCP / 知识库四份 JSON**（各自单框，分别粘贴）；插件侧见下方「适配状态」。
+> 产出 **v5 JSON 模型配置**、**联网配置 JSON**，以及**角色设定 / 技能 / MCP / 知识库 / 事件触发规则五份 JSON**（各自单框，分别粘贴）；插件侧见下方「适配状态」。
 
 ## 为什么需要它
 
@@ -65,7 +65,7 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 - **遮蔽 API Key**：导出时换成 `sk-xxxx`，方便截图分享
 - **格式化开关**：输出默认紧凑单行，打开后多行缩进（模型 / 联网两个输出窗口都有）
 - **本地草稿**：自动存 localStorage
-- **角色 / 技能 / MCP / 知识库四个页签**：各自生成一份 JSON；支持文件导入（SKILL.md / Markdown / 文本 / MCP JSON）、JSON 导入导出、MCP 敏感信息遮蔽（详见下文）
+- **角色 / 技能 / MCP / 知识库 / 事件触发五个页签**：各自生成一份 JSON；支持文件导入（SKILL.md / Markdown / 文本 / MCP JSON / 规则 JSON）、JSON 导入导出、MCP 敏感信息遮蔽（详见下文）
 
 ### 联网搜索分区
 
@@ -82,9 +82,9 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 
 纯逻辑在 `js/web.js`，自检：`node tests/web-check.mjs`。
 
-### 角色 / 技能 / MCP / 知识库分区
+### 角色 / 技能 / MCP / 知识库 / 事件触发分区
 
-顶栏另外四个页签分别生成一份独立 JSON，各自粘贴到插件对应配置项（都是**单框 String 配置**）：
+顶栏另外五个页签分别生成一份独立 JSON，各自粘贴到插件对应配置项（都是**单框 String 配置**）：
 
 | 页签 | 粘到插件 | JSON 形态 | 生效方式 |
 | --- | --- | --- | --- |
@@ -92,25 +92,44 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 | 技能 | 技能 →「技能列表」 | `{version:1, skills:[{name,description,platform,content}]}` | `.ai skill refresh` |
 | MCP | MCP →「MCP服务器」 | **标准 MCP JSON**：`{"mcpServers":{"<服务器名>":{"type":"http","url":"…","headers":{…}}}}`；另支持扩展字段 `platform` | `.ai mcp refresh`（先开「是否启用MCP」） |
 | 知识库 | 知识库 →「知识库配置」 | `{version:1, libraries:[{name,description,platform,content}]}` | `.ai kb refresh` |
+| 事件触发 | 触发 →「事件触发规则」 | `{version:1, rules:[{name,on,scope,match,prompt,toolChoice}]}` | 重载 JS |
 
 共同点：
 
-- **一个分区一份 JSON，互不影响**；顺序 = 插件里的运行时顺序（角色序号 / 技能展示顺序 / 服务器顺序 / 知识库展示顺序）。
-- `platform` 省略或 `[]` = 所有平台。
+- **一个分区一份 JSON，互不影响**；顺序 = 插件里的运行时顺序（角色序号 / 技能展示顺序 / 服务器顺序 / 知识库展示顺序 / 规则匹配顺序）。
+- 平台白名单省略或 `[]` = 所有平台（内容分区是 `platform`，事件触发是 `scope.platforms`）。
 - **每个条目卡片都有「启用」开关**：关闭的条目只留在生成器草稿里，**不会写进生成的 JSON**（不产生 `enabled` 字段）；MCP 同理，关闭 = 直接从 `mcpServers` 里移除。
 - **直接导入文件**：
   - 技能：标准 `SKILL.md`（`---` frontmatter + 正文，这是其他 agent 通用的技能文件格式），一个文件一个技能；
   - 知识库：`.md` / `.txt`，库名取第一个 `# 标题`，没有标题时用文件名；描述取正文首段；
   - 角色：`.md` / `.txt`，文件名作为角色名，整份文本作为设定；
-  - MCP：`.json`，**要求标准 `mcpServers` 结构**（与 Claude Desktop / Cursor 的 `.mcp.json` 一致）；stdio（`command`）与 SSE 会明确警告并跳过。
+  - MCP：`.json`，**要求标准 `mcpServers` 结构**（与 Claude Desktop / Cursor 的 `.mcp.json` 一致）；stdio（`command`）与 SSE 会明确警告并跳过；
+  - 事件触发：`.json`，与「触发 → 事件触发规则」同格式（规范对象或裸数组都行）。
 - 也支持把已有 JSON 粘进「导入…」继续改；导入会**替换**当前页签内容，校验不通过时不动任何东西。
-- 「恢复默认」：角色 / 技能 / 知识库与插件出厂默认一致；**MCP 插件出厂默认为空**，生成器保留四台示例（`mcp-files-exec` / `md-html-render` / `mcp-browser` / `image-host`）供按需复制。默认数据由 `tools/sync-default-data.mjs` 从插件源码生成，插件改默认值时重跑。
+- 「恢复默认」：角色 / 技能 / 知识库与插件出厂默认一致；**MCP 插件的出厂默认为空**，生成器保留四台示例（`mcp-files-exec` / `md-html-render` / `mcp-browser` / `image-host`）供按需复制；**事件触发出厂默认为空**，默认输出 `{"version":1,"rules":[]}`。默认数据由 `tools/sync-default-data.mjs` 从插件源码生成，插件改默认值时重跑。
 - MCP 输出是**标准 MCP JSON**：顶层 `mcpServers` 对象，键 = 服务器名，字段用 `type` / `url` / `headers`；`token` 只是输入简写，导出时合并成 `Authorization: Bearer …`，不会输出非标准字段；`platform` 是 aiplugin4 的扩展字段（标准客户端会忽略未知字段）。启用开关关闭的服务器直接不出现。
 - 只支持 Streamable HTTP 的 MCP。
 - 生成器的「启用」是**条目级**开关，只影响该条目是否出现在生成的 JSON 里；「是否启用MCP / 启用知识库记忆 / 会话回收」这类**全局开关**仍由插件配置页单独设置，不写进 JSON。
-- 插件侧这四项是**新的 JSON 键名**，旧的多框配置项不再读取、也不会自动迁移；升级后按生成器重新生成一份粘贴即可。
+- 插件侧这些页签对应**新的 JSON 键名**，旧的多框配置项不再读取、也不会自动迁移；升级后按生成器重新生成一份粘贴即可。
 
 纯逻辑在 `js/domains/*.js`，Node 自检：`node tests/domains-run.mjs`；浏览器交互自检：`tests/domain-e2e-check.html`。
+
+### 事件触发分区
+
+顶栏「事件触发」页签为插件「触发 → 事件触发规则」生成规则 JSON（schema v1，规则最多 50 条）：
+
+- **规则**：`{ version: 1, rules: [...] }`；`name` 1~40 字，`prompt` 1~4000 字，均为必填。
+- **on**：触发事件，字符串或字符串数组，也可填 `*` 表示全部。可用：
+  `group_increase`、`group_decrease`、`group_admin`、`group_ban`、`group_recall`、`group_msg_emoji_like`、`essence`、`group_upload`、`group_card`、`friend_recall`、`friend_add`、`group_joined`、`notify.poke`、`notify.group_name`、`notify.title`、`notify.honor`、`notify.lucky_king`、`notify.profile_like`、`group_request`、`friend_request`。
+  编辑面板里多个事件用逗号分隔即可。
+- **scope**：`platforms` 平台白名单（留空 = 所有平台）；`sessions` 限定会话 UNI-ID（每行一个，留空 = 所有会话）；`exclude` 排除会话（每行一个）；后两者最多 200 个。
+- **match**：最多 10 条，每条 `{field, regex}` 或 `{field, equals}` 二选一；`field` 白名单：
+  `event_type`、`post_type`、`notice_type`、`sub_type`、`request_type`、`user_id`、`operator_id`、`group_id`、`message_id`、`is_group`、`is_target_bot`、`platform`、`session_id`。
+- **prompt**：交给 AI 的提示词，可用占位符 `{user_id}` `{operator_id}` `{group_id}` `{session_id}` `{platform}` `{event_text}` `{event_json}` `{flag}` `{comment}` `{sub_type}`。
+- **toolChoice**：`auto`（默认，允许调用工具；生成时省略，保持输出干净）或 `none`（纯文本回复，不调用工具）。
+- `group_request` / `friend_request` 事件也会正常触发响应：`group_request` 是主场景；`friend_request` 可能因双方已是好友而无法投递。
+- 「启用」开关关闭的规则只留在草稿里，不写进 JSON；导入时未知键只产生 warning，不会导致整份配置被拒。
+- 点「复制全部」→ 粘到海豹 → JS插件 → 插件设置 → aiplugin4 →「触发」→「事件触发规则」；重载 JS 生效。
 
 ### 关于 API Key
 
@@ -157,8 +176,8 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 插件侧已同步改造（v5 单框 `模型配置` 取代 `api连接` + `模型规则`）。
 **要装到海豹，需要插件仓库的 `dist/aiplugin4.js` 构建产物 —— 而不仅是拉源码。**
 
-角色 / 技能 / MCP / 知识库四个页签对应插件侧的**新 JSON 配置键**（`角色设定`、`技能列表`、`MCP服务器`、`知识库配置`），
-格式版本为 `1`。旧的多框配置项不再读取、也不自动迁移；升级后请用这四个页签重新生成并粘贴。
+角色 / 技能 / MCP / 知识库 / 事件触发五个页签对应插件侧的**新 JSON 配置键**（`角色设定`、`技能列表`、`MCP服务器`、`知识库配置`、`事件触发规则`），
+格式版本为 `1`。旧的多框配置项不再读取、也不自动迁移；升级后请用这五个页签重新生成并粘贴。
 
 ## 文件结构
 
@@ -167,7 +186,7 @@ index.html            页面结构
 css/styles.css        样式
 docs/ui-standard.md   页签 / 卡片动作 / 工具栏 / 导入对话框 / 编辑侧栏的统一标准
 js/ui.js             通用 UI 元件（toast / 复制 / 下载 / 文件选择 / 导入对话框 / 编辑侧栏 / 卡片动作）
-js/tabs.js            统一页签切换（6 个分区）
+js/tabs.js            统一页签切换（7 个分区）
 js/templates.js       供应商模板（对应插件 PROVIDER_MAP）
 js/classify.js        模型类型分类（与插件 catalog.ts 同源，是其超集）
 js/v5.js              v5 配置的构建 / 校验 / 序列化
@@ -175,18 +194,19 @@ js/fetch-models.js    模型列表拉取（含 CORS 降级 + 供应商自报能�
 js/app.js             模型分区交互逻辑
 js/web.js             联网配置的构建 / 校验 / 序列化（对应插件 src/web/schema.ts）
 js/web-app.js         联网分区的交互逻辑
-js/domain-app.js      角色 / 技能 / MCP / 知识库的通用交互层
-js/domains/common.js  四个内容分区的共用纯逻辑（JSON / 校验 / SKILL.md frontmatter）
+js/domain-app.js      角色 / 技能 / MCP / 知识库 / 事件触发的通用交互层
+js/domains/common.js  内容分区的共用纯逻辑（JSON / 校验 / SKILL.md frontmatter）
 js/domains/roles.js   角色设定：校验 / 构建 / 导入 / 文件解析
 js/domains/skills.js  技能：校验 / 构建 / 导入 / SKILL.md 解析
 js/domains/mcp.js     MCP：标准 mcpServers JSON 的校验 / 构建 / 导入 / 遮蔽
 js/domains/kb.js     知识库：校验 / 构建 / 导入 / Markdown 解析
+js/domains/event-trigger.js  事件触发：校验 / 构建 / 导入 / 文件解析
 js/domains/default-data.js  出厂默认（由 tools/sync-default-data.mjs 生成）
 tests/run.mjs         模型 / 联网逻辑测试（252 项）
-tests/domains-run.mjs 四个内容分区逻辑测试（101 项）
+tests/domains-run.mjs 五个内容分区逻辑测试（155 项）
 tests/web-check.mjs  联网分区逻辑自检（28 项）
 tests/dom-test.html   模型 / 联网浏览器交互测试（207 项）
-tests/domain-e2e-check.html 四个内容分区浏览器交互测试（42 项）
+tests/domain-e2e-check.html 五个内容分区浏览器交互测试（52 项）
 tests/web-e2e-check.html 联网分区统一编辑/启用/导入交互测试（12 项）
 tests/close-check.html 面板关闭路径定点验证
 tests/purpose-check.html 用途绑定卡片 + 取用顺序角标检查（25 项）
@@ -264,13 +284,13 @@ tests/cors-probe.html CORS 实测工具
 ## 测试
 
 ```bash
-npm test                  # 模型 / 联网 + 四个内容分区的全部 Node 逻辑测试
+npm test                  # 模型 / 联网 + 五个内容分区的全部 Node 逻辑测试
 # 或分开跑：
 node tests/run.mjs        # 模型 / 联网逻辑
-node tests/domains-run.mjs # 角色 / 技能 / MCP / 知识库逻辑
+node tests/domains-run.mjs # 角色 / 技能 / MCP / 知识库 / 事件触发逻辑
 # 浏览器：起服务后打开
 #   tests/dom-test.html          模型 / 联网交互
-#   tests/domain-e2e-check.html  四个内容分区交互
+#   tests/domain-e2e-check.html  五个内容分区交互
 #   tests/web-e2e-check.html     联网分区统一编辑/导入交互
 #   tests/style-check.html       排版与动效
 ```

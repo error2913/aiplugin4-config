@@ -31,7 +31,7 @@
       <span class="brand-mark" aria-hidden="true"></span>
       <div>
         <h1>aiplugin4 配置生成器</h1>
-        <p class="brand-sub">可视化填写模型 / 联网 / 角色 / 技能 / MCP / 知识库配置，生成可直接粘贴的 JSON</p>
+        <p class="brand-sub">可视化填写模型 / 联网 / 角色 / 技能 / MCP / 知识库 / 事件触发配置，生成可直接粘贴的 JSON</p>
       </div>
     </div>
   </div>
@@ -44,6 +44,7 @@
   <button class="view-tab" data-view="skills" type="button" role="tab" aria-selected="false">技能</button>
   <button class="view-tab" data-view="mcp" type="button" role="tab" aria-selected="false">MCP</button>
   <button class="view-tab" data-view="kb" type="button" role="tab" aria-selected="false">知识库</button>
+  <button class="view-tab" data-view="eventTrigger" type="button" role="tab" aria-selected="false">事件触发</button>
 </nav>
 
 <main class="layout" id="modelLayout">
@@ -165,11 +166,12 @@
   </section>
 </main>
 
-<!-- 角色 / 技能 / MCP / 知识库：布局由 js/domain-app.js 按 spec 生成 -->
+<!-- 角色 / 技能 / MCP / 知识库 / 事件触发：布局由 js/domain-app.js 按 spec 生成 -->
 <main class="layout" id="rolesLayout" hidden></main>
 <main class="layout" id="skillsLayout" hidden></main>
 <main class="layout" id="mcpLayout" hidden></main>
 <main class="layout" id="kbLayout" hidden></main>
+<main class="layout" id="eventTriggerLayout" hidden></main>
 
 <!-- 导入对话框：粘一份已有配置进来接着改（导入是导出的逆） -->
 <div id="importBackdrop" class="backdrop" hidden></div>
@@ -229,7 +231,7 @@
 })();
 </script>
 <script>
-// 角色 / 技能 / MCP / 知识库四个内容分区（通用交互层 + 各分区纯逻辑）
+// 角色 / 技能 / MCP / 知识库 / 事件触发五个内容分区（通用交互层 + 各分区纯逻辑）
 (function () {
   var v = new URLSearchParams(location.search).get('v');
   var q = v ? '?v=' + encodeURIComponent(v) : '';

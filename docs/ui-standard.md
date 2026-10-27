@@ -1,6 +1,6 @@
 # 配置生成器 UI 统一元素标准
 
-> 适用范围：`aiplugin4-config` 的 6 个页签（模型 / 联网 / 角色 / 技能 / MCP / 知识库）。
+> 适用范围：`aiplugin4-config` 的 7 个页签（模型 / 联网 / 角色 / 技能 / MCP / 知识库 / 事件触发）。
 > 新增页签或改现有页签时，**通用元素必须按本文档实现**，不要各写一套。
 > 实现入口：`js/ui.js`（toast / 复制 / 下载 / 文件选择 / 导入对话框 / 编辑侧栏 / 卡片动作）、`js/tabs.js`（页签）。
 
@@ -10,7 +10,7 @@
 - 当前页签：`class="active"` + `aria-selected="true"`；由 `js/tabs.js` 统一切换，各分区不要自己操作其它 layout。
 - 每个页签一个 `<main class="layout" id="<id>Layout" hidden>`；切换到该页签时显示，其余隐藏。
 - 支持深链：`?tab=<id>` 或 `#<id>`；默认 `model`。
-- 页签顺序：模型配置、联网搜索、角色设定、技能、MCP、知识库。
+- 页签顺序：模型配置、联网搜索、角色设定、技能、MCP、知识库、事件触发。
 
 ## 2. 页面布局
 
@@ -90,6 +90,8 @@
 - 面板结构：`.panel-head`（标题 + `×`）→ `.panel-body` → `.panel-foot`（取消 / 保存）。
 - 保存时先校验/归一，再写回状态；取消丢弃改动。
 - 表单字段统一用 `.field` / `.field-label` / `.field-note`；JSON 字段用 `.json-area`，解析失败留在面板并提示。
+  - `type: 'json'` 默认只接受对象；数组字段（如事件触发的 `match`）加 `jsonKind: 'array'`，保存时要求是 JSON 数组。
+  - 多行字符串数组（如事件触发的 `sessions` / `exclude`，每行一个 UNI-ID）用 `type: 'lines'`，与数组自动互转。
 
 ## 7. 文件导入（统一）
 
@@ -100,6 +102,7 @@
   - 知识库：`.md` / `.txt`（`#` 标题作库名，首段作描述，正文原样）；
   - 角色：`.md` / `.txt`（文件名作角色名，整份文本作设定）；
   - MCP：标准 `mcpServers` JSON（Claude Desktop / Cursor `.mcp.json`）；
+  - 事件触发：`.json`（与「触发 → 事件触发规则」同格式的规则文档，或裸规则数组）；
   - 模型 / 联网：`.json`（各自的 v5 / web schema）。
 - 除技能外，**不解析 frontmatter**；插件自定义格式一律用 JSON，不再引入第二种文本格式。
 

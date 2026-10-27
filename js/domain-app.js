@@ -1,7 +1,7 @@
-// 角色 / 技能 / MCP / 知识库四个分区的通用交互层。
+// 角色 / 技能 / MCP / 知识库 / 事件触发五个分区的通用交互层。
 //
-// 四个分区的结构一致（一组条目 + 一份 JSON 输出 + 导入 / 文件导入 / 复制），
-// 差异全部收敛在 js/domains/*.js 的 spec 里；本文件只做 DOM 与通用行为，避免复制四份。
+// 五个分区的结构一致（一组条目 + 一份 JSON 输出 + 导入 / 文件导入 / 复制），
+// 差异全部收敛在 js/domains/*.js 的 spec 里；本文件只做 DOM 与通用行为，避免复制五份。
 import { DOMAIN_SPECS } from './domains/index.js';
 import {
     clone, formatPlatform, parsePlatform, stringifyConfig, withUids,
@@ -19,6 +19,14 @@ const el = (tag, cls) => {
     if (cls) e.className = cls;
     return e;
 };
+
+/** 多行文本 → 字符串数组（去空行、去首尾空白） */
+function splitLines(text) {
+    return String(text ?? '')
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean);
+}
 
 let uidSeq = 0;
 const nextUid = () => `d${++uidSeq}-${Math.random().toString(36).slice(2, 7)}`;
@@ -252,11 +260,21 @@ function renderEditorFields() {
             control.rows = field.rows || 10;
             control.value = value ?? '';
             control.oninput = () => { panelDraft[field.key] = control.value; };
+        } else if (field.type === 'lines') {
+            // 多行文本 ↔ 字符串数组（每行一个值），如事件触发的 sessions / exclude
+            control = el('textarea', 'json-area');
+            control.rows = field.rows || 6;
+            control.value = Array.isArray(value) ? value.join('\n') : String(value ?? '');
+            control.oninput = () => { panelDraft[field.key] = splitLines(control.value); };
         } else if (field.type === 'json') {
+            const isArray = field.jsonKind === 'array';
             control = el('textarea', 'json-area');
             control.rows = field.rows || 6;
             control.spellcheck = false;
-            control.value = value && Object.keys(value).length > 0 ? JSON.stringify(value, null, 2) : '{}';
+            const current = isArray
+                ? (Array.isArray(value) ? value : [])
+                : (value && Object.keys(value).length > 0 ? value : {});
+            control.value = JSON.stringify(current, null, 2);
             control.oninput = () => { panelDraft.__jsonDirty = true; };
         } else if (field.type === 'secret') {
             control = apiKeyInput(value ?? '', (v) => { panelDraft[field.key] = v; }, { placeholder: field.placeholder });
@@ -324,15 +342,18 @@ function saveEditor() {
     // JSON 字段：保存时解析，错了就停在面板里
     for (const field of spec.fields) {
         if (field.type !== 'json') continue;
+        const isArray = field.jsonKind === 'array';
         const control = $(`domainField_${spec.id}_${field.key}`);
         const raw = String(control?.value ?? '').trim();
         if (!raw) {
-            draft[field.key] = {};
+            draft[field.key] = isArray ? [] : {};
             continue;
         }
         try {
             const parsed = JSON.parse(raw);
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            if (isArray) {
+                if (!Array.isArray(parsed)) throw new Error('必须是 JSON 数组');
+            } else if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
                 throw new Error('必须是 JSON 对象');
             }
             draft[field.key] = parsed;

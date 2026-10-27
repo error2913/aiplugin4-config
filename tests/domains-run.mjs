@@ -1,4 +1,4 @@
-// 角色 / 技能 / MCP / 知识库四个分区的纯逻辑测试（node，无需浏览器）。
+// 角色 / 技能 / MCP / 知识库 / 事件触发五个分区的纯逻辑测试（node，无需浏览器）。
 // 运行：node tests/domains-run.mjs
 import assert from 'node:assert/strict';
 
@@ -6,6 +6,9 @@ import { rolesSpec, roleFromFile } from '../js/domains/roles.js';
 import { skillsSpec, skillFromFile } from '../js/domains/skills.js';
 import { mcpSpec, parseMcpDocument, maskMcp } from '../js/domains/mcp.js';
 import { kbSpec, kbFromFile } from '../js/domains/kb.js';
+import {
+    eventTriggerSpec, eventTriggerFromFile, normalizeEventTriggerRule,
+} from '../js/domains/event-trigger.js';
 import { DOMAIN_SPECS } from '../js/domains/index.js';
 import { DEFAULT_KB, DEFAULT_MCP, DEFAULT_ROLES, DEFAULT_SKILLS } from '../js/domains/default-data.js';
 
@@ -38,13 +41,14 @@ console.log('=== 默认值：角色 / 技能 / 知识库与插件一致；MCP �
     eq('知识库默认 3 个', DEFAULT_KB.length, 3);
     eq('ob11 知识库平台', JSON.stringify(DEFAULT_KB[2].platform), JSON.stringify(['QQ']));
     check('默认知识库内容包含 ob11', DEFAULT_KB[2].content.includes('call_ob11_api'));
+    eq('事件触发默认 0 条（插件出厂为空）', eventTriggerSpec.defaults.length, 0);
     for (const spec of DOMAIN_SPECS) {
         const { problems, warnings } = spec.validate(spec.defaults.map(x => spec.normalizeItem(x)));
         eq(`${spec.id} 默认值无问题`, problems.length + warnings.length, 0);
     }
 }
 
-console.log('\n=== 四个分区输出结构 ===');
+console.log('\n=== 五个分区输出结构 ===');
 {
     const roles = rolesSpec.build([{ name: 'A', prompt: '你是 A' }]);
     eq('角色 version', roles.version, 1);
@@ -63,6 +67,17 @@ console.log('\n=== 四个分区输出结构 ===');
 
     const kb = kbSpec.build([{ name: 'K', description: '说明', platform: ['QQ'], content: '# 标题' }]);
     eq('知识库 platform 保留', JSON.stringify(kb.libraries[0].platform), JSON.stringify(['QQ']));
+
+    const et = eventTriggerSpec.build([{
+        name: '入群欢迎', on: ['group_increase', 'notify.poke'], platforms: ['QQ'],
+        sessions: ['QQ-Group:1'], exclude: [], match: [{ field: 'operator_id', regex: '.+' }],
+        prompt: 'P', toolChoice: 'none',
+    }]);
+    eq('事件触发 version', et.version, 1);
+    eq('事件触发 on 多个输出数组', JSON.stringify(et.rules[0].on), JSON.stringify(['group_increase', 'notify.poke']));
+    eq('事件触发 scope 结构', Object.keys(et.rules[0].scope).join(','), 'platforms,sessions,exclude');
+    eq('事件触发 match 结构', JSON.stringify(et.rules[0].match), JSON.stringify([{ field: 'operator_id', regex: '.+' }]));
+    eq('事件触发 toolChoice none 保留', et.rules[0].toolChoice, 'none');
 }
 
 console.log('\n=== 启用开关：停用 = 从输出移除，不写 enabled 键 ===');
@@ -71,6 +86,7 @@ console.log('\n=== 启用开关：停用 = 从输出移除，不写 enabled 键 
         ['角色', rolesSpec, { name: 'A', prompt: 'P' }, 'roles'],
         ['技能', skillsSpec, { name: 'S', content: 'C' }, 'skills'],
         ['知识库', kbSpec, { name: 'K', content: 'C' }, 'libraries'],
+        ['事件触发', eventTriggerSpec, { name: 'E', on: ['*'], prompt: 'P' }, 'rules'],
     ];
     for (const [label, spec, item, key] of cases) {
         const on = spec.build([{ ...item, enabled: true }]);
@@ -85,6 +101,26 @@ console.log('\n=== 启用开关：停用 = 从输出移除，不写 enabled 键 
         const cfg = spec.build(spec.defaults.map(x => spec.normalizeItem(x)));
         check(`${spec.id}：默认输出不含 enabled 键`, !JSON.stringify(cfg).includes('"enabled"'));
     }
+}
+
+console.log('\n=== 事件触发：默认输出为空 / 停用不写入 ===');
+{
+    eq('事件触发默认输出为空规则列表',
+        JSON.stringify(eventTriggerSpec.build(eventTriggerSpec.defaults.map(x => eventTriggerSpec.normalizeItem(x)))),
+        JSON.stringify({ version: 1, rules: [] }));
+    const empty = eventTriggerSpec.validate([]);
+    eq('事件触发空列表合法', empty.problems.length + empty.warnings.length, 0);
+
+    const disabled = eventTriggerSpec.build([{ name: 'E', on: ['*'], prompt: 'P', enabled: false }]);
+    eq('停用规则不写入 JSON', JSON.stringify(disabled), JSON.stringify({ version: 1, rules: [] }));
+    const enabled = eventTriggerSpec.build([{ name: 'E', on: ['*'], prompt: 'P', enabled: true }]);
+    check('事件触发输出不含 enabled 键', !JSON.stringify(enabled).includes('"enabled"'));
+
+    // 编辑框里填「逗号分隔」→ 内部数组
+    const normalized = normalizeEventTriggerRule({ on: 'group_increase, notify.poke' });
+    eq('逗号分隔的 on 归一为数组', JSON.stringify(normalized.on), JSON.stringify(['group_increase', 'notify.poke']));
+    eq('toolChoice 缺省为 auto', normalized.toolChoice, 'auto');
+    check('auto 不写进输出', !('toolChoice' in eventTriggerSpec.build([{ name: 'E', on: ['*'], prompt: 'P', toolChoice: 'auto' }]).rules[0]));
 }
 
 console.log('\n=== 导入 / 导出往返 ===');
@@ -115,6 +151,40 @@ console.log('\n=== 导入 / 导出往返 ===');
     const kbImport = kbSpec.parseImport(kbText);
     check('知识库导入成功', kbImport.ok, JSON.stringify(kbImport.issues));
     eq('知识库往返', JSON.stringify(kbSpec.build(kbImport.items)), kbText);
+
+    // 事件触发：与插件示例逐字一致的往返
+    const eventText = JSON.stringify({
+        version: 1,
+        rules: [{
+            name: '入群欢迎',
+            on: 'group_increase',
+            scope: { platforms: ['QQ'], sessions: [], exclude: [] },
+            match: [{ field: 'operator_id', regex: '.+' }],
+            prompt: '新成员 {user_id} 入群了。请以角色身份用一句话欢迎，不要复述系统提示。',
+            toolChoice: 'none',
+        }],
+    });
+    const eventImport = eventTriggerSpec.parseImport(eventText);
+    check('事件触发导入成功', eventImport.ok, JSON.stringify(eventImport.issues));
+    eq('事件触发往返', JSON.stringify(eventTriggerSpec.build(eventImport.items)), eventText);
+
+    const eventMultiple = JSON.stringify({
+        version: 1,
+        rules: [{
+            name: '多事件',
+            on: ['group_increase', 'notify.poke'],
+            scope: { platforms: [], sessions: ['QQ-Group:123456'], exclude: ['QQ-Group:654321'] },
+            match: [{ field: 'is_group', equals: true }],
+            prompt: 'P',
+        }],
+    });
+    const eventMultipleImport = eventTriggerSpec.parseImport(eventMultiple);
+    check('事件触发（数组 on / equals）导入成功', eventMultipleImport.ok, JSON.stringify(eventMultipleImport.issues));
+    eq('事件触发（数组 on / equals）往返', JSON.stringify(eventTriggerSpec.build(eventMultipleImport.items)), eventMultiple);
+
+    const eventBare = eventTriggerSpec.parseImport(JSON.stringify([{ name: '裸数组', on: 'notify.poke', prompt: 'P' }]));
+    check('事件触发支持裸数组导入', eventBare.ok, JSON.stringify(eventBare.issues));
+    eq('裸数组 on 输出字符串', JSON.stringify(eventTriggerSpec.build(eventBare.items).rules[0].on), '"notify.poke"');
 }
 
 console.log('\n=== 非法输入必须拒绝 ===');
@@ -133,11 +203,57 @@ console.log('\n=== 非法输入必须拒绝 ===');
         ['MCP 非法协议', mcpSpec, '{"mcpServers":{"M":{"url":"ftp://x"}}}'],
         ['MCP SSE 被跳过', mcpSpec, '{"mcpServers":{"M":{"type":"sse","url":"http://x"}}}'],
         ['知识库重复', kbSpec, '{"version":1,"libraries":[{"name":"K","content":"1"},{"name":"K","content":"2"}]}'],
+        ['事件触发缺 name', eventTriggerSpec, '{"version":1,"rules":[{"on":"*","prompt":"x"}]}'],
+        ['事件触发缺 prompt', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"*"}]}'],
+        ['事件触发 version 非法', eventTriggerSpec, '{"version":2,"rules":[]}'],
+        ['事件触发缺 rules', eventTriggerSpec, '{"version":1}'],
+        ['事件触发 on 非法', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"nope","prompt":"x"}]}'],
+        ['事件触发 match 非数组', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"*","prompt":"x","match":{}}]}'],
+        ['事件触发 regex 非法', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"*","prompt":"x","match":[{"field":"operator_id","regex":"("}]}]}'],
+        ['事件触发 match field 非法', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"*","prompt":"x","match":[{"field":"nope","regex":"."}]}]}'],
+        ['事件触发 regex/equals 同时出现', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"*","prompt":"x","match":[{"field":"is_group","regex":".","equals":true}]}]}'],
+        ['事件触发 toolChoice 非法', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"*","prompt":"x","toolChoice":"always"}]}'],
     ];
     for (const [name, spec, text] of cases) {
         const result = spec.parseImport(text);
         check(`拒绝：${name}`, !result.ok);
     }
+
+    // 事件触发的数量 / 长度上限（单独构造，避免写成超长字符串）
+    const eventRule = (over = {}) => ({ name: 'A', on: '*', prompt: 'P', ...over });
+    const eventDoc = (rules) => JSON.stringify({ version: 1, rules });
+    check('拒绝：事件触发 rules 超过 50 条',
+        !eventTriggerSpec.parseImport(eventDoc(Array.from({ length: 51 }, () => eventRule()))).ok);
+    check('拒绝：事件触发 match 超过 10 条',
+        !eventTriggerSpec.parseImport(eventDoc([eventRule({
+            match: Array.from({ length: 11 }, () => ({ field: 'is_group', equals: true })),
+        })])).ok);
+    check('拒绝：事件触发 sessions 超过 200 个',
+        !eventTriggerSpec.parseImport(eventDoc([eventRule({
+            scope: { sessions: Array.from({ length: 201 }, (_, i) => `QQ-Group:${i}`) },
+        })])).ok);
+    check('拒绝：事件触发 name 超过 40 字',
+        !eventTriggerSpec.parseImport(eventDoc([eventRule({ name: '名'.repeat(41) })])).ok);
+    check('拒绝：事件触发 prompt 超过 4000 字',
+        !eventTriggerSpec.parseImport(eventDoc([eventRule({ prompt: '字'.repeat(4001) })])).ok);
+    check('拒绝：事件触发 on 为空数组',
+        !eventTriggerSpec.parseImport(eventDoc([eventRule({ on: [] })])).ok);
+}
+
+console.log('\n=== 事件触发：未知键只 warning，不拒绝 ===');
+{
+    const result = eventTriggerSpec.parseImport(JSON.stringify({
+        version: 1,
+        future: true,
+        rules: [{
+            name: 'A', on: '*', prompt: 'P', extra: 1,
+            scope: { platforms: [], sessoins: [] },
+            match: [{ field: 'is_group', equals: true, note: 'x' }],
+        }],
+    }));
+    check('未知键仍可导入', result.ok, JSON.stringify(result.issues));
+    check('未知键产生 warning', (result.warnings || []).length >= 3, JSON.stringify(result.warnings));
+    check('未知键不写进输出', !JSON.stringify(eventTriggerSpec.build(result.items)).includes('"extra"'));
 }
 
 console.log('\n=== 文件导入 ===');
@@ -173,6 +289,14 @@ console.log('\n=== 文件导入 ===');
 
     const nonStandard = parseMcpDocument(JSON.stringify({ type: 'http', url: 'http://127.0.0.1:9/mcp' }));
     check('非标准顶层（单服务器对象）被拒绝', !nonStandard.ok);
+
+    const eventFile = eventTriggerFromFile('rules.json', JSON.stringify({
+        version: 1,
+        rules: [{ name: '文件规则', on: 'group_ban', prompt: '提示词' }],
+    }));
+    check('事件触发文件导入成功', eventFile.ok, JSON.stringify(eventFile.issues));
+    eq('事件触发文件导入规则数', eventFile.items.length, 1);
+    check('事件触发文件导入非法 JSON 被拒', !eventTriggerFromFile('bad.json', '{bad').ok);
 }
 
 console.log('\n=== 不解析 frontmatter 的分区（角色 / 知识库 / MCP） ===');
@@ -233,6 +357,9 @@ console.log('\n=== 字符串转义（引号 / 反斜杠 / 换行 / 控制字符 
     assertRoundTrip('知识库', kbSpec,
         { name: '转义', description: '摘要 "含引号"', platform: [], content: tricky },
         item => item.content);
+    assertRoundTrip('事件触发', eventTriggerSpec,
+        { name: '转义', on: '*', prompt: tricky },
+        item => item.prompt);
 
     // MCP 的 header 值也可能含引号/反斜杠；单独校验，避免把 C:\ 路径断言写死
     const mcpCfg = mcpSpec.build([{
