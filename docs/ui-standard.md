@@ -90,8 +90,14 @@
 - 面板结构：`.panel-head`（标题 + `×`）→ `.panel-body` → `.panel-foot`（取消 / 保存）。
 - 保存时先校验/归一，再写回状态；取消丢弃改动。
 - 表单字段统一用 `.field` / `.field-label` / `.field-note`；JSON 字段用 `.json-area`，解析失败留在面板并提示。
-  - `type: 'json'` 默认只接受对象；数组字段（如事件触发的 `match`）加 `jsonKind: 'array'`，保存时要求是 JSON 数组。
+  - `type: 'json'` 默认只接受对象；数组字段可加 `jsonKind: 'array'`，保存时要求是 JSON 数组。
   - 多行字符串数组（如事件触发的 `sessions` / `exclude`，每行一个 UNI-ID）用 `type: 'lines'`，与数组自动互转。
+  - 下拉分组：`type: 'select'` 支持 `optionGroups`（分组）+ `options`（末尾追加项），两者可以是数组或返回数组的回调。
+  - 条件行编辑器：`type: 'conditions'`（「字段 / 操作 / 值 / 删除」行，含「直接编辑 JSON」折叠与双向同步；字段/值选项由 spec 的 `conditionFields` 提供，可带枚举值）。事件触发的 `match` 使用它。
+  - 折叠分组：`type: 'details'` 渲染 `<details>` 子字段（如事件触发的「作用范围（高级）」）。
+  - 条件显示：字段可加 `visibleIf(draft)`（如「自定义事件名」仅在选中「自定义事件…」时出现）。
+  - 字段级操作按钮：`actionLabel` + `onAction(draft)`（如「恢复预设提示词」），返回 `true` 时重渲染面板。
+  - 分区钩子：`onFieldChange(fieldKey, value, prevValue, draft)` 在字段变更后调用，返回 `true` 时重渲染（事件触发用它切换事件时填预设 prompt / 默认条件）；`cardTitle(item)` 可自定义卡片标题（事件触发用中文事件短名）。
 
 ## 7. 文件导入（统一）
 

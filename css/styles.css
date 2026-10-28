@@ -512,6 +512,27 @@ details[open] > .usage {
   line-height: 1.55;
 }
 
+/* ---------- 条件编辑器（事件触发 match：字段 / 操作 / 值 / 删除） ---------- */
+.cond-editor { display: flex; flex-direction: column; gap: 8px; }
+.cond-list { display: flex; flex-direction: column; gap: 8px; }
+.cond-row { display: flex; align-items: center; gap: 8px; }
+.cond-row select, .cond-row input { font-size: var(--fs-sm); padding: 7px 9px; min-width: 0; }
+.cond-field { flex: 0 1 32%; }
+.cond-op { flex: 0 1 20%; }
+.cond-value-wrap { flex: 1 1 auto; min-width: 80px; }
+.cond-value { width: 100%; }
+.cond-row .cond-del { flex: 0 0 auto; }
+.cond-empty { font-size: var(--fs-xs); color: var(--text-faint); }
+.cond-actions { display: flex; gap: 8px; align-items: center; }
+.cond-error { font-size: var(--fs-xs); color: #ff9d96; line-height: 1.55; word-break: break-word; }
+.field-action { display: flex; justify-content: flex-end; }
+.field-action .btn { padding: 5px 10px; font-size: var(--fs-xs); }
+@media (max-width: 640px) {
+  .cond-row { flex-wrap: wrap; }
+  .cond-field, .cond-op { flex: 1 1 40%; }
+  .cond-value-wrap { flex: 1 1 100%; }
+}
+
 /* 逐模型的 bodyMode 行 */
 .body-mode-row {
   display: flex; align-items: center; gap: 8px;

@@ -92,7 +92,7 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 | 技能 | 技能 →「技能列表」 | `{version:1, skills:[{name,description,platform,content}]}` | `.ai skill refresh` |
 | MCP | MCP →「MCP服务器」 | **标准 MCP JSON**：`{"mcpServers":{"<服务器名>":{"type":"http","url":"…","headers":{…}}}}`；另支持扩展字段 `platform` | `.ai mcp refresh`（先开「是否启用MCP」） |
 | 知识库 | 知识库 →「知识库配置」 | `{version:1, libraries:[{name,description,platform,content}]}` | `.ai kb refresh` |
-| 事件触发 | 触发 →「事件触发规则」 | `{version:1, rules:[{name,on,scope,match,prompt,toolChoice}]}` | 重载 JS |
+| 事件触发 | 触发 →「事件触发规则」 | `{version:1, rules:[{on,scope,match,prompt}]}`（一条规则一个扁平事件名） | 重载 JS |
 
 共同点：
 
@@ -116,21 +116,20 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 
 ### 事件触发分区
 
-顶栏「事件触发」页签为插件「触发 → 事件触发规则」生成规则 JSON（schema v1，规则最多 50 条）：
+顶栏「事件触发」页签为插件「触发 → 事件触发规则」生成规则 JSON（schema v1，规则最多 50 条）。
 
-- **规则**：`{ version: 1, rules: [...] }`；`name` 1~40 字，`prompt` 1~4000 字，均为必填。
-- **on**：触发事件，字符串或字符串数组，也可填 `*` 表示全部。可用：
-  `group_increase`、`group_decrease`、`group_admin`、`group_ban`、`group_recall`、`group_msg_emoji_like`、`essence`、`group_upload`、`group_card`、`friend_recall`、`friend_add`、`group_joined`、`notify.poke`、`notify.group_name`、`notify.title`、`notify.honor`、`notify.lucky_king`、`notify.profile_like`、`group_request`、`friend_request`。
-  编辑面板里多个事件用逗号分隔即可。
-- **scope**：`platforms` 平台白名单（留空 = 所有平台）；`sessions` 限定会话 UNI-ID（每行一个，留空 = 所有会话）；`exclude` 排除会话（每行一个）；后两者最多 200 个。
-- **match**：最多 10 条，每条 `{field, regex}` 或 `{field, equals}` 二选一；`field` 白名单：
-  `event_type`、`post_type`、`notice_type`、`sub_type`、`request_type`、`user_id`、`operator_id`、`group_id`、`message_id`、`is_group`、`is_target_bot`、`platform`、`session_id`。
-- **prompt**：交给 AI 的提示词，可用占位符 `{user_id}` `{operator_id}` `{group_id}` `{session_id}` `{platform}` `{event_text}` `{event_json}` `{flag}` `{comment}` `{sub_type}`。
-- **toolChoice**：`auto`（默认，允许调用工具；生成时省略，保持输出干净）或 `none`（纯文本回复，不调用工具）。
-- `group_request` / `friend_request` 事件也会正常触发响应：`group_request` 是主场景；`friend_request` 可能因双方已是好友而无法投递。
+- **规则**：`{ version: 1, rules: [...] }`；每条规则**只绑一个扁平事件名**，无规则名、无工具限制字段。
+- **事件**：中文短名下拉（按 群成员 / 群消息 / 群信息 / 机器人 / 好友 / 申请 分组），选中后自动填充英文预设提示词：
+  入群、退群、管理变更、禁言、撤回、文件上传、名片变更、表情回应、精华消息、群名变更、头衔变更、群荣誉、运气王、机器人入群、戳一戳、新好友、好友撤回、加群申请、好友申请。
+  「自定义事件…」可手输事件名（小写字母/数字/下划线）；插件不认识的未知事件会只给 warning，协议端未上报时不会触发。
+- **prompt**：1~4000 字；选中事件自动填英文预设，可编辑，点「恢复预设提示词」还原；不提供中文预设。占位符：`{user_id}` `{operator_id}` `{group_id}` `{session_id}` `{platform}` `{event_text}` `{event_json}` `{event_type}` `{flag}` `{comment}` `{sub_type}`。
+- **scope（作用范围，高级折叠，默认全部）**：`platforms` 平台白名单；`sessions` 限定会话 UNI-ID（每行一个）；`exclude` 排除会话（每行一个）；后两者最多 200 个。
+- **触发条件（match）**：可视化行编辑器——字段（中文字段下拉：触发者/操作者/群号/消息ID/子类型/请求类型/平台/会话ID/是否群聊/是否戳机器人）+ 操作（等于 / 匹配正则）+ 值；可增删；也可展开「直接编辑 JSON」。最多 10 条，全部满足才触发；输出始终是规范数组（插件额外接受对象糖，生成器不输出）。
+- 「戳一戳」默认带一条 `is_target_bot = true` 条件（避免戳别人也触发），可删；其他事件默认无条件。
+- `group_request` / `friend_request` 也会正常触发响应：`group_request`（加群申请）是主场景；`friend_request` 可能因双方已是好友而无法投递回复。
+- **旧格式导入迁移**：含 `name` / `toolChoice` / `on` 数组 / `notify.*` 复合名的旧 JSON 或旧本地草稿会自动迁移（丢无效字段、数组取第一个并 warning、复合名映射扁平名、match 对象糖展开）。
 - 「启用」开关关闭的规则只留在草稿里，不写进 JSON；导入时未知键只产生 warning，不会导致整份配置被拒。
 - 点「复制全部」→ 粘到海豹 → JS插件 → 插件设置 → aiplugin4 →「触发」→「事件触发规则」；重载 JS 生效。
-
 ### 关于 API Key
 
 **API Key 会保存在本机浏览器里**（localStorage），刷新不丢 —— 不必反复粘贴。

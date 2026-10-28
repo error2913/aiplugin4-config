@@ -8,6 +8,9 @@ import { mcpSpec, parseMcpDocument, maskMcp } from '../js/domains/mcp.js';
 import { kbSpec, kbFromFile } from '../js/domains/kb.js';
 import {
     eventTriggerSpec, eventTriggerFromFile, normalizeEventTriggerRule,
+    EVENT_TABLE, EVENT_NAMES, EVENT_GROUPS, EVENT_LABELS, PRESET_PROMPTS, GENERIC_PRESET,
+    DEFAULT_MATCH, applyEventSelection, parseConditionsText, CONDITION_FIELDS, MATCH_FIELDS,
+    eventLabel, presetFor,
 } from '../js/domains/event-trigger.js';
 import { DOMAIN_SPECS } from '../js/domains/index.js';
 import { DEFAULT_KB, DEFAULT_MCP, DEFAULT_ROLES, DEFAULT_SKILLS } from '../js/domains/default-data.js';
@@ -48,6 +51,65 @@ console.log('=== 默认值：角色 / 技能 / 知识库与插件一致；MCP �
     }
 }
 
+console.log('\n=== 事件触发：事件表 / 中文短名 / 英文预设 ===');
+{
+    eq('事件表 19 个', EVENT_TABLE.length, 19);
+    check('事件名唯一', new Set(EVENT_NAMES).size === EVENT_TABLE.length);
+    eq('下拉分组数', EVENT_GROUPS.length, 6);
+    eq('分组覆盖全部事件', EVENT_GROUPS.reduce((sum, group) => sum + group.events.length, 0), EVENT_TABLE.length);
+    eq('入群中文名', EVENT_LABELS.group_increase, '入群');
+    eq('戳一戳中文名', EVENT_LABELS.poke, '戳一戳');
+    eq('加群申请中文名', EVENT_LABELS.group_request, '加群申请');
+    check('每个事件都有英文预设', EVENT_TABLE.every(event => event.prompt.trim().length > 20 && /[A-Za-z]/.test(event.prompt)));
+    check('事件表不含 notify.* 复合名', EVENT_TABLE.every(event => !event.on.includes('notify.')));
+    check('不提供 profile_like / gray_tip / input_status',
+        !EVENT_NAMES.includes('profile_like') && !EVENT_NAMES.includes('gray_tip') && !EVENT_NAMES.includes('input_status'));
+    eq('eventLabel 已知事件 → 中文短名', eventLabel('group_increase'), '入群');
+    eq('eventLabel 自定义事件 → 事件名', eventLabel('my_event'), 'my_event');
+    eq('presetFor 已知事件', presetFor('group_increase'), PRESET_PROMPTS.group_increase);
+    eq('presetFor 自定义事件 → 通用兜底', presetFor('my_event'), GENERIC_PRESET);
+    eq('戳一戳默认条件', JSON.stringify(DEFAULT_MATCH.poke), JSON.stringify([{ field: 'is_target_bot', equals: true }]));
+    eq('其他事件无默认条件', DEFAULT_MATCH.group_increase, undefined);
+    eq('match 字段白名单与插件一致', MATCH_FIELDS.length, 13);
+    check('条件编辑器字段都来自白名单', CONDITION_FIELDS.every(field => MATCH_FIELDS.includes(field.value)));
+    check('布尔条件字段 is_target_bot', CONDITION_FIELDS.some(field => field.value === 'is_target_bot' && field.kind === 'boolean'));
+    check('sub_type / request_type 给枚举建议',
+        CONDITION_FIELDS.some(field => field.value === 'sub_type' && field.kind === 'enum')
+        && CONDITION_FIELDS.some(field => field.value === 'request_type' && field.kind === 'enum'));
+}
+
+console.log('\n=== 事件触发：选中事件时的预设行为 ===');
+{
+    const draft = { on: 'group_increase', prompt: PRESET_PROMPTS.group_increase, match: [] };
+    applyEventSelection(draft, 'group_increase', 'poke');
+    eq('切到戳一戳：自动填英文预设', draft.prompt, PRESET_PROMPTS.poke);
+    eq('切到戳一戳：自动带 is_target_bot 条件',
+        JSON.stringify(draft.match), JSON.stringify([{ field: 'is_target_bot', equals: true }]));
+
+    draft.prompt = '自定义提示词';
+    applyEventSelection(draft, 'poke', 'group_decrease');
+    eq('改过的 prompt 切换事件不覆盖', draft.prompt, '自定义提示词');
+    eq('切走戳一戳后默认条件移除', JSON.stringify(draft.match), '[]');
+
+    draft.prompt = presetFor(draft.on);
+    eq('恢复预设提示词（面板按钮的纯逻辑）', draft.prompt, PRESET_PROMPTS.group_decrease);
+
+    const blank = { on: 'group_increase', prompt: '', match: [] };
+    applyEventSelection(blank, 'group_increase', 'friend_add');
+    eq('空 prompt 切事件自动填预设', blank.prompt, PRESET_PROMPTS.friend_add);
+
+    const custom = { on: 'group_increase', prompt: PRESET_PROMPTS.group_increase, match: [] };
+    applyEventSelection(custom, 'group_increase', '');
+    eq('切到自定义事件填通用兜底', custom.prompt, GENERIC_PRESET);
+
+    // 用户自己的条件不被事件切换冲掉
+    const userMatch = { on: 'group_increase', prompt: PRESET_PROMPTS.group_increase, match: [{ field: 'user_id', equals: 'QQ:1' }] };
+    applyEventSelection(userMatch, 'group_increase', 'poke');
+    eq('用户条件保留，另补戳一戳默认条件',
+        JSON.stringify(userMatch.match),
+        JSON.stringify([{ field: 'is_target_bot', equals: true }, { field: 'user_id', equals: 'QQ:1' }]));
+}
+
 console.log('\n=== 五个分区输出结构 ===');
 {
     const roles = rolesSpec.build([{ name: 'A', prompt: '你是 A' }]);
@@ -69,15 +131,17 @@ console.log('\n=== 五个分区输出结构 ===');
     eq('知识库 platform 保留', JSON.stringify(kb.libraries[0].platform), JSON.stringify(['QQ']));
 
     const et = eventTriggerSpec.build([{
-        name: '入群欢迎', on: ['group_increase', 'notify.poke'], platforms: ['QQ'],
-        sessions: ['QQ-Group:1'], exclude: [], match: [{ field: 'operator_id', regex: '.+' }],
-        prompt: 'P', toolChoice: 'none',
+        on: 'group_increase', platforms: ['QQ'], sessions: ['QQ-Group:1'], exclude: [],
+        match: [{ field: 'sub_type', equals: 'approve' }, { field: 'user_id', regex: '^QQ:100' }],
+        prompt: PRESET_PROMPTS.group_increase,
     }]);
     eq('事件触发 version', et.version, 1);
-    eq('事件触发 on 多个输出数组', JSON.stringify(et.rules[0].on), JSON.stringify(['group_increase', 'notify.poke']));
+    eq('事件触发 on 输出单个字符串', et.rules[0].on, 'group_increase');
     eq('事件触发 scope 结构', Object.keys(et.rules[0].scope).join(','), 'platforms,sessions,exclude');
-    eq('事件触发 match 结构', JSON.stringify(et.rules[0].match), JSON.stringify([{ field: 'operator_id', regex: '.+' }]));
-    eq('事件触发 toolChoice none 保留', et.rules[0].toolChoice, 'none');
+    eq('事件触发 match 规范数组',
+        JSON.stringify(et.rules[0].match),
+        JSON.stringify([{ field: 'sub_type', equals: 'approve' }, { field: 'user_id', regex: '^QQ:100' }]));
+    check('事件触发输出无 name / toolChoice', !('name' in et.rules[0]) && !('toolChoice' in et.rules[0]));
 }
 
 console.log('\n=== 启用开关：停用 = 从输出移除，不写 enabled 键 ===');
@@ -86,7 +150,7 @@ console.log('\n=== 启用开关：停用 = 从输出移除，不写 enabled 键 
         ['角色', rolesSpec, { name: 'A', prompt: 'P' }, 'roles'],
         ['技能', skillsSpec, { name: 'S', content: 'C' }, 'skills'],
         ['知识库', kbSpec, { name: 'K', content: 'C' }, 'libraries'],
-        ['事件触发', eventTriggerSpec, { name: 'E', on: ['*'], prompt: 'P' }, 'rules'],
+        ['事件触发', eventTriggerSpec, { on: 'group_increase', prompt: 'P' }, 'rules'],
     ];
     for (const [label, spec, item, key] of cases) {
         const on = spec.build([{ ...item, enabled: true }]);
@@ -103,7 +167,7 @@ console.log('\n=== 启用开关：停用 = 从输出移除，不写 enabled 键 
     }
 }
 
-console.log('\n=== 事件触发：默认输出为空 / 停用不写入 ===');
+console.log('\n=== 事件触发：默认输出为空 / 停用不写入 / 归一迁移 ===');
 {
     eq('事件触发默认输出为空规则列表',
         JSON.stringify(eventTriggerSpec.build(eventTriggerSpec.defaults.map(x => eventTriggerSpec.normalizeItem(x)))),
@@ -111,16 +175,31 @@ console.log('\n=== 事件触发：默认输出为空 / 停用不写入 ===');
     const empty = eventTriggerSpec.validate([]);
     eq('事件触发空列表合法', empty.problems.length + empty.warnings.length, 0);
 
-    const disabled = eventTriggerSpec.build([{ name: 'E', on: ['*'], prompt: 'P', enabled: false }]);
+    const disabled = eventTriggerSpec.build([{ on: 'group_increase', prompt: 'P', enabled: false }]);
     eq('停用规则不写入 JSON', JSON.stringify(disabled), JSON.stringify({ version: 1, rules: [] }));
-    const enabled = eventTriggerSpec.build([{ name: 'E', on: ['*'], prompt: 'P', enabled: true }]);
-    check('事件触发输出不含 enabled 键', !JSON.stringify(enabled).includes('"enabled"'));
+    const enabledRule = eventTriggerSpec.build([{ on: 'group_increase', prompt: 'P', enabled: true }]);
+    check('事件触发输出不含 enabled 键', !JSON.stringify(enabledRule).includes('"enabled"'));
+    check('事件触发输出不含 name / toolChoice',
+        !('name' in enabledRule.rules[0]) && !('toolChoice' in enabledRule.rules[0]));
 
-    // 编辑框里填「逗号分隔」→ 内部数组
-    const normalized = normalizeEventTriggerRule({ on: 'group_increase, notify.poke' });
-    eq('逗号分隔的 on 归一为数组', JSON.stringify(normalized.on), JSON.stringify(['group_increase', 'notify.poke']));
-    eq('toolChoice 缺省为 auto', normalized.toolChoice, 'auto');
-    check('auto 不写进输出', !('toolChoice' in eventTriggerSpec.build([{ name: 'E', on: ['*'], prompt: 'P', toolChoice: 'auto' }]).rules[0]));
+    // 归一 / 迁移：旧字段、on 数组、notify.*、match 对象糖
+    const normalized = normalizeEventTriggerRule({
+        name: '旧规则', toolChoice: 'none', on: ['notify.poke', 'group_increase'],
+        match: { is_target_bot: true }, prompt: 'P',
+    });
+    eq('旧 on 数组取第一个并扁平化', normalized.on, 'poke');
+    eq('旧 match 对象糖展开', JSON.stringify(normalized.match), JSON.stringify([{ field: 'is_target_bot', equals: true }]));
+    check('归一结果无 name / toolChoice', !('name' in normalized) && !('toolChoice' in normalized));
+    eq('归一保留 prompt', normalized.prompt, 'P');
+
+    // 自定义事件（不在事件表里）→ on 空 + customOn
+    const custom = normalizeEventTriggerRule({ on: 'my_custom_event', prompt: 'P' });
+    eq('未知事件进自定义模式', custom.on, '');
+    eq('自定义事件名保留', custom.customOn, 'my_custom_event');
+
+    // 生成器内部草稿形态：on 为空 + customOn
+    const draftCustom = normalizeEventTriggerRule({ on: '', customOn: 'future_event', prompt: 'P' });
+    eq('草稿 customOn 迁移', draftCustom.customOn, 'future_event');
 }
 
 console.log('\n=== 导入 / 导出往返 ===');
@@ -152,39 +231,53 @@ console.log('\n=== 导入 / 导出往返 ===');
     check('知识库导入成功', kbImport.ok, JSON.stringify(kbImport.issues));
     eq('知识库往返', JSON.stringify(kbSpec.build(kbImport.items)), kbText);
 
-    // 事件触发：与插件示例逐字一致的往返
+    // 事件触发：与插件示例逐字一致的往返（无 name / toolChoice，on 单字符串，match 规范数组）
     const eventText = JSON.stringify({
         version: 1,
         rules: [{
-            name: '入群欢迎',
             on: 'group_increase',
             scope: { platforms: ['QQ'], sessions: [], exclude: [] },
-            match: [{ field: 'operator_id', regex: '.+' }],
-            prompt: '新成员 {user_id} 入群了。请以角色身份用一句话欢迎，不要复述系统提示。',
-            toolChoice: 'none',
+            match: [{ field: 'sub_type', equals: 'approve' }],
+            prompt: 'A new member joined the group. Greet them briefly in character.',
         }],
     });
     const eventImport = eventTriggerSpec.parseImport(eventText);
     check('事件触发导入成功', eventImport.ok, JSON.stringify(eventImport.issues));
     eq('事件触发往返', JSON.stringify(eventTriggerSpec.build(eventImport.items)), eventText);
 
-    const eventMultiple = JSON.stringify({
+    // 旧版生成器输出（name / toolChoice / on 数组 / notify.*）迁移后可导入，并规范化输出
+    const legacyText = JSON.stringify({
         version: 1,
         rules: [{
-            name: '多事件',
-            on: ['group_increase', 'notify.poke'],
-            scope: { platforms: [], sessions: ['QQ-Group:123456'], exclude: ['QQ-Group:654321'] },
+            name: '旧规则', toolChoice: 'none',
+            on: ['notify.poke', 'group_increase'],
+            scope: { platforms: [], sessions: ['QQ-Group:123456'], exclude: [] },
             match: [{ field: 'is_group', equals: true }],
             prompt: 'P',
         }],
     });
-    const eventMultipleImport = eventTriggerSpec.parseImport(eventMultiple);
-    check('事件触发（数组 on / equals）导入成功', eventMultipleImport.ok, JSON.stringify(eventMultipleImport.issues));
-    eq('事件触发（数组 on / equals）往返', JSON.stringify(eventTriggerSpec.build(eventMultipleImport.items)), eventMultiple);
+    const legacyImport = eventTriggerSpec.parseImport(legacyText);
+    check('旧版 JSON 迁移导入成功', legacyImport.ok, JSON.stringify(legacyImport.issues));
+    eq('迁移后 on = poke', legacyImport.items[0].on, 'poke');
+    check('迁移有 on 数组 warning', (legacyImport.warnings || []).some(w => /on 是数组/.test(w.msg)));
+    check('迁移有 name / toolChoice 丢弃提示',
+        (legacyImport.warnings || []).some(w => /name/.test(w.msg))
+        && (legacyImport.warnings || []).some(w => /toolChoice/.test(w.msg)));
+    eq('迁移保留作用范围', JSON.stringify(legacyImport.items[0].sessions), JSON.stringify(['QQ-Group:123456']));
 
-    const eventBare = eventTriggerSpec.parseImport(JSON.stringify([{ name: '裸数组', on: 'notify.poke', prompt: 'P' }]));
+    // match 对象糖（导入）→ 规范数组输出
+    const sugarImport = eventTriggerSpec.parseImport(JSON.stringify({
+        version: 1,
+        rules: [{ on: 'group_decrease', match: { sub_type: 'leave', is_target_bot: false }, prompt: 'P' }],
+    }));
+    check('match 对象糖导入成功', sugarImport.ok, JSON.stringify(sugarImport.issues));
+    eq('对象糖展开为等值数组',
+        JSON.stringify(eventTriggerSpec.build(sugarImport.items).rules[0].match),
+        JSON.stringify([{ field: 'sub_type', equals: 'leave' }, { field: 'is_target_bot', equals: false }]));
+
+    const eventBare = eventTriggerSpec.parseImport(JSON.stringify([{ on: 'notify.group_name', prompt: 'P' }]));
     check('事件触发支持裸数组导入', eventBare.ok, JSON.stringify(eventBare.issues));
-    eq('裸数组 on 输出字符串', JSON.stringify(eventTriggerSpec.build(eventBare.items).rules[0].on), '"notify.poke"');
+    eq('裸数组 notify.* 扁平化', eventTriggerSpec.build(eventBare.items).rules[0].on, 'group_name');
 }
 
 console.log('\n=== 非法输入必须拒绝 ===');
@@ -203,16 +296,20 @@ console.log('\n=== 非法输入必须拒绝 ===');
         ['MCP 非法协议', mcpSpec, '{"mcpServers":{"M":{"url":"ftp://x"}}}'],
         ['MCP SSE 被跳过', mcpSpec, '{"mcpServers":{"M":{"type":"sse","url":"http://x"}}}'],
         ['知识库重复', kbSpec, '{"version":1,"libraries":[{"name":"K","content":"1"},{"name":"K","content":"2"}]}'],
-        ['事件触发缺 name', eventTriggerSpec, '{"version":1,"rules":[{"on":"*","prompt":"x"}]}'],
-        ['事件触发缺 prompt', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"*"}]}'],
+        ['事件触发缺 on', eventTriggerSpec, '{"version":1,"rules":[{"prompt":"x"}]}'],
+        ['事件触发 on 为空字符串', eventTriggerSpec, '{"version":1,"rules":[{"on":"","prompt":"x"}]}'],
+        ['事件触发缺 prompt', eventTriggerSpec, '{"version":1,"rules":[{"on":"group_increase"}]}'],
         ['事件触发 version 非法', eventTriggerSpec, '{"version":2,"rules":[]}'],
         ['事件触发缺 rules', eventTriggerSpec, '{"version":1}'],
-        ['事件触发 on 非法', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"nope","prompt":"x"}]}'],
-        ['事件触发 match 非数组', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"*","prompt":"x","match":{}}]}'],
-        ['事件触发 regex 非法', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"*","prompt":"x","match":[{"field":"operator_id","regex":"("}]}]}'],
-        ['事件触发 match field 非法', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"*","prompt":"x","match":[{"field":"nope","regex":"."}]}]}'],
-        ['事件触发 regex/equals 同时出现', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"*","prompt":"x","match":[{"field":"is_group","regex":".","equals":true}]}]}'],
-        ['事件触发 toolChoice 非法', eventTriggerSpec, '{"version":1,"rules":[{"name":"A","on":"*","prompt":"x","toolChoice":"always"}]}'],
+        ['事件触发 on 非法字符', eventTriggerSpec, '{"version":1,"rules":[{"on":"bad.name","prompt":"x"}]}'],
+        ['事件触发 on 旧通配符', eventTriggerSpec, '{"version":1,"rules":[{"on":"*","prompt":"x"}]}'],
+        ['事件触发 match 非数组/对象', eventTriggerSpec, '{"version":1,"rules":[{"on":"group_increase","prompt":"x","match":3}]}'],
+        ['事件触发 regex 非法', eventTriggerSpec, '{"version":1,"rules":[{"on":"group_increase","prompt":"x","match":[{"field":"operator_id","regex":"("}]}]}'],
+        ['事件触发 match field 非法', eventTriggerSpec, '{"version":1,"rules":[{"on":"group_increase","prompt":"x","match":[{"field":"nope","regex":"."}]}]}'],
+        ['事件触发 regex/equals 同时出现', eventTriggerSpec, '{"version":1,"rules":[{"on":"group_increase","prompt":"x","match":[{"field":"is_group","regex":".","equals":true}]}]}'],
+        ['事件触发 regex/equals 都不给', eventTriggerSpec, '{"version":1,"rules":[{"on":"group_increase","prompt":"x","match":[{"field":"is_group"}]}]}'],
+        ['事件触发对象糖值非法', eventTriggerSpec, '{"version":1,"rules":[{"on":"group_increase","prompt":"x","match":{"is_group":{"bad":1}}}]}'],
+        ['事件触发 scope 非对象', eventTriggerSpec, '{"version":1,"rules":[{"on":"group_increase","prompt":"x","scope":[]}]}'],
     ];
     for (const [name, spec, text] of cases) {
         const result = spec.parseImport(text);
@@ -220,8 +317,9 @@ console.log('\n=== 非法输入必须拒绝 ===');
     }
 
     // 事件触发的数量 / 长度上限（单独构造，避免写成超长字符串）
-    const eventRule = (over = {}) => ({ name: 'A', on: '*', prompt: 'P', ...over });
+    const eventRule = (over = {}) => ({ on: 'group_increase', prompt: 'P', ...over });
     const eventDoc = (rules) => JSON.stringify({ version: 1, rules });
+    check('接受：0 条规则', eventTriggerSpec.parseImport(eventDoc([])).ok);
     check('拒绝：事件触发 rules 超过 50 条',
         !eventTriggerSpec.parseImport(eventDoc(Array.from({ length: 51 }, () => eventRule()))).ok);
     check('拒绝：事件触发 match 超过 10 条',
@@ -232,28 +330,69 @@ console.log('\n=== 非法输入必须拒绝 ===');
         !eventTriggerSpec.parseImport(eventDoc([eventRule({
             scope: { sessions: Array.from({ length: 201 }, (_, i) => `QQ-Group:${i}`) },
         })])).ok);
-    check('拒绝：事件触发 name 超过 40 字',
-        !eventTriggerSpec.parseImport(eventDoc([eventRule({ name: '名'.repeat(41) })])).ok);
+    check('拒绝：事件触发 platforms 超过 20 个',
+        !eventTriggerSpec.parseImport(eventDoc([eventRule({
+            scope: { platforms: Array.from({ length: 21 }, (_, i) => `P${i}`) },
+        })])).ok);
     check('拒绝：事件触发 prompt 超过 4000 字',
         !eventTriggerSpec.parseImport(eventDoc([eventRule({ prompt: '字'.repeat(4001) })])).ok);
     check('拒绝：事件触发 on 为空数组',
         !eventTriggerSpec.parseImport(eventDoc([eventRule({ on: [] })])).ok);
 }
 
-console.log('\n=== 事件触发：未知键只 warning，不拒绝 ===');
+console.log('\n=== 事件触发：未知键 / 旧字段 / 自定义事件 ===');
 {
     const result = eventTriggerSpec.parseImport(JSON.stringify({
         version: 1,
         future: true,
         rules: [{
-            name: 'A', on: '*', prompt: 'P', extra: 1,
+            on: 'group_increase', prompt: 'P', extra: 1,
+            name: '旧规则名', toolChoice: 'none',
             scope: { platforms: [], sessoins: [] },
             match: [{ field: 'is_group', equals: true, note: 'x' }],
         }],
     }));
-    check('未知键仍可导入', result.ok, JSON.stringify(result.issues));
-    check('未知键产生 warning', (result.warnings || []).length >= 3, JSON.stringify(result.warnings));
-    check('未知键不写进输出', !JSON.stringify(eventTriggerSpec.build(result.items)).includes('"extra"'));
+    check('未知键 / 旧字段仍可导入', result.ok, JSON.stringify(result.issues));
+    check('产生多条 warning', (result.warnings || []).length >= 4, JSON.stringify(result.warnings));
+    check('name / toolChoice 有迁移提示',
+        (result.warnings || []).some(w => /name/.test(w.msg))
+        && (result.warnings || []).some(w => /toolChoice/.test(w.msg)));
+    check('未知键不写进输出',
+        !JSON.stringify(eventTriggerSpec.build(result.items)).includes('"extra"')
+        && !JSON.stringify(eventTriggerSpec.build(result.items)).includes('"name"')
+        && !JSON.stringify(eventTriggerSpec.build(result.items)).includes('"toolChoice"'));
+
+    // 自定义事件：合法命名可导入，但带 warning
+    const custom = eventTriggerSpec.parseImport(JSON.stringify({
+        version: 1,
+        rules: [{ on: 'future_event', prompt: 'P' }],
+    }));
+    check('合法自定义事件可导入', custom.ok, JSON.stringify(custom.issues));
+    check('自定义事件有未知事件 warning', (custom.warnings || []).some(w => /未知事件/.test(w.msg)));
+    eq('自定义事件进入自定义模式', custom.items[0].on, '');
+    eq('自定义事件名保留', custom.items[0].customOn, 'future_event');
+
+    // 被插件硬排除的事件只 warning
+    const profile = eventTriggerSpec.parseImport(JSON.stringify({
+        version: 1,
+        rules: [{ on: 'profile_like', prompt: 'P' }],
+    }));
+    check('profile_like 可导入', profile.ok, JSON.stringify(profile.issues));
+    check('profile_like 有硬排除 warning', (profile.warnings || []).some(w => /硬排除/.test(w.msg)));
+}
+
+console.log('\n=== 事件触发：条件 JSON 与可视化行互转 ===');
+{
+    const parsed = parseConditionsText('[{"field":"is_group","equals":"true"},{"field":"user_id","regex":"^QQ:100"}]');
+    check('条件 JSON 解析成功', parsed.ok, parsed.error);
+    eq('布尔字段字符串归一为布尔',
+        JSON.stringify(parsed.value),
+        JSON.stringify([{ field: 'is_group', equals: true }, { field: 'user_id', regex: '^QQ:100' }]));
+    const sugar = parseConditionsText('{"sub_type":"leave"}');
+    eq('对象糖转条件行', JSON.stringify(sugar.value), JSON.stringify([{ field: 'sub_type', equals: 'leave' }]));
+    check('非法条件字段报错', !parseConditionsText('[{"field":"nope","equals":1}]').ok);
+    check('非法正则报错', !parseConditionsText('[{"field":"user_id","regex":"("}]').ok);
+    check('空文本 = 无条件', parseConditionsText('').ok && parseConditionsText('').value.length === 0);
 }
 
 console.log('\n=== 文件导入 ===');
@@ -292,11 +431,19 @@ console.log('\n=== 文件导入 ===');
 
     const eventFile = eventTriggerFromFile('rules.json', JSON.stringify({
         version: 1,
-        rules: [{ name: '文件规则', on: 'group_ban', prompt: '提示词' }],
+        rules: [{ on: 'group_ban', prompt: '提示词' }],
     }));
     check('事件触发文件导入成功', eventFile.ok, JSON.stringify(eventFile.issues));
     eq('事件触发文件导入规则数', eventFile.items.length, 1);
     check('事件触发文件导入非法 JSON 被拒', !eventTriggerFromFile('bad.json', '{bad').ok);
+
+    const eventLegacyFile = eventTriggerFromFile('old.json', JSON.stringify({
+        version: 1,
+        rules: [{ name: '旧文件规则', toolChoice: 'none', on: ['notify.poke'], prompt: 'P' }],
+    }));
+    check('旧版文件迁移导入成功',
+        eventLegacyFile.ok && eventLegacyFile.items[0].on === 'poke',
+        JSON.stringify(eventLegacyFile.issues));
 }
 
 console.log('\n=== 不解析 frontmatter 的分区（角色 / 知识库 / MCP） ===');
@@ -358,7 +505,7 @@ console.log('\n=== 字符串转义（引号 / 反斜杠 / 换行 / 控制字符 
         { name: '转义', description: '摘要 "含引号"', platform: [], content: tricky },
         item => item.content);
     assertRoundTrip('事件触发', eventTriggerSpec,
-        { name: '转义', on: '*', prompt: tricky },
+        { on: 'group_increase', prompt: tricky },
         item => item.prompt);
 
     // MCP 的 header 值也可能含引号/反斜杠；单独校验，避免把 C:\ 路径断言写死
