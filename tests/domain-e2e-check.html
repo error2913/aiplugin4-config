@@ -225,7 +225,7 @@ f.onload = async () => {
         const kbAfter = json('kbPreview');
         check('知识库可新增', kbAfter.libraries.some(l => l.name === '新库'), JSON.stringify(kbAfter.libraries.map(l => l.name)));
 
-        // ---------- 事件触发：中文事件下拉 / 英文预设 / 条件编辑器 / 停用不写入 ----------
+        // ---------- 事件触发：中文事件下拉 / 空提示词 / 条件编辑器 / 停用不写入 ----------
         await clickTab('eventTrigger');
         check('切到事件触发', shown(d.getElementById('eventTriggerLayout')) && !shown(d.getElementById('kbLayout')));
         check('事件触发默认 0 条', cardCount('eventTrigger') === 0, cardCount('eventTrigger'));
@@ -246,14 +246,14 @@ f.onload = async () => {
         check('没有规则名字段', !etField('name'));
         check('没有工具调用字段', !etField('toolChoice'));
         check('事件下拉默认选第一个事件', etField('on').value === 'group_increase', etField('on').value);
-        check('默认自动填英文预设', etField('prompt').value.includes('A new member joined the group'), etField('prompt').value);
+        check('提示词默认留空', etField('prompt').value === '', etField('prompt').value);
         check('作用范围默认折叠在高级选项',
             !!etField('platforms') && !!etField('platforms').closest('details') && !etField('platforms').closest('details').open);
 
-        // 选戳一戳：自动英文预设 + is_target_bot 条件
+        // 选戳一戳：自动带 is_target_bot 条件；提示词仍留空
         etChange('on', 'poke');
         await sleep(30);
-        check('戳一戳自动填英文预设', etField('prompt').value.includes('Someone poked you'), etField('prompt').value);
+        check('切换事件不自动填充提示词', etField('prompt').value === '', etField('prompt').value);
         let etRows = [...d.querySelectorAll('#domainField_eventTrigger_match_list .cond-row')];
         check('戳一戳自动带 1 条默认条件', etRows.length === 1, etRows.length);
         check('戳一戳默认条件 is_target_bot = true',
@@ -281,22 +281,20 @@ f.onload = async () => {
         check('直接编辑 JSON 同步到条件行',
             d.querySelectorAll('#domainField_eventTrigger_match_list .cond-row')[0]?.querySelector('.cond-field')?.value === 'user_id');
 
-        // 改 prompt 后切事件不覆盖；恢复预设
+        // 用户手写的 prompt 在切换事件时保持
         const etPrompt = etField('prompt');
         etPrompt.value = 'custom prompt stays';
         etPrompt.dispatchEvent(new w.Event('input', { bubbles: true }));
         etChange('on', 'group_decrease');
         await sleep(30);
-        check('改过的 prompt 切换事件不覆盖', etField('prompt').value === 'custom prompt stays', etField('prompt').value);
-        etField('prompt_action').click();
-        await sleep(30);
-        check('恢复预设提示词', etField('prompt').value.includes('A member left the group'), etField('prompt').value);
+        check('手写 prompt 切换事件不覆盖', etField('prompt').value === 'custom prompt stays', etField('prompt').value);
+        check('不再有恢复预设按钮', !etField('prompt_action'));
 
         // 自定义事件
         etChange('on', '');
         await sleep(30);
         check('选自定义事件后显示事件名输入框', shown(etField('customOn')));
-        check('自定义事件填通用兜底提示词', etField('prompt').value.includes('An event occurred'), etField('prompt').value);
+        check('自定义事件提示词保持用户输入', etField('prompt').value === 'custom prompt stays', etField('prompt').value);
         const etCustom = etField('customOn');
         etCustom.value = 'future_event';
         etCustom.dispatchEvent(new w.Event('input', { bubbles: true }));
@@ -310,7 +308,7 @@ f.onload = async () => {
         check('事件触发输出规则（无 name / toolChoice）',
             etAfter.rules.length === 1
             && etAfter.rules[0].on === 'future_event'
-            && etAfter.rules[0].prompt.includes('An event occurred')
+            && etAfter.rules[0].prompt === 'custom prompt stays'
             && etAfter.rules[0].match[0]?.field === 'user_id'
             && etAfter.rules[0].match[0]?.regex === '^QQ:100'
             && !('name' in etAfter.rules[0])
@@ -319,7 +317,7 @@ f.onload = async () => {
         check('未知自定义事件给出提示', !d.getElementById('eventTriggerValidation').hidden);
         check('提示不影响复制', !d.getElementById('eventTriggerCopy').disabled);
 
-        // 第二条规则：戳一戳（验证预设可直接保存）
+        // 第二条规则：戳一戳（提示词默认留空也可直接保存）
         d.querySelector('#eventTriggerCards .dcard-add').click();
         await sleep(30);
         etChange('on', 'poke');
@@ -332,7 +330,7 @@ f.onload = async () => {
             && etTwo.rules[1].on === 'poke'
             && etTwo.rules[1].match[0]?.field === 'is_target_bot'
             && etTwo.rules[1].match[0]?.equals === true
-            && etTwo.rules[1].prompt.includes('Someone poked you'),
+            && etTwo.rules[1].prompt === '',
             JSON.stringify(etTwo.rules[1]));
 
         // 停用第一条 → 不写入输出

@@ -34,28 +34,27 @@ const BOOLEAN_FIELDS = ['is_group', 'is_target_bot'];
 /**
  * 生成器下拉事件表（顺序 = 下拉分组顺序）。
  * 只列这些：profile_like 被插件硬排除；gray_tip / input_status 是噪音。
- * 英文预设提示词 = 选中事件时自动填充的初始 prompt（可改、可恢复）。
  */
 export const EVENT_TABLE = [
-    { on: 'group_increase', label: '入群', group: '群成员', prompt: 'A new member joined the group. Greet them briefly in character.' },
-    { on: 'group_decrease', label: '退群', group: '群成员', prompt: 'A member left the group. React briefly in character if appropriate.' },
-    { on: 'group_admin', label: '管理变更', group: '群成员', prompt: 'A group admin change happened. React briefly in character if appropriate.' },
-    { on: 'group_ban', label: '禁言', group: '群成员', prompt: 'A group member was muted or unmuted. React briefly in character if appropriate.' },
-    { on: 'group_card', label: '名片变更', group: '群成员', prompt: 'A member\'s group card changed. React briefly in character if appropriate.' },
-    { on: 'group_recall', label: '撤回', group: '群消息', prompt: 'A group message was recalled. React briefly in character; do not speculate about unseen content.' },
-    { on: 'group_upload', label: '文件上传', group: '群消息', prompt: 'Someone uploaded a file to the group. React briefly in character if appropriate.' },
-    { on: 'group_msg_emoji_like', label: '表情回应', group: '群消息', prompt: 'Someone reacted to a message with an emoji. React briefly in character if appropriate.' },
-    { on: 'essence', label: '精华消息', group: '群消息', prompt: 'A message was set as or removed from group essence. React briefly in character if appropriate.' },
-    { on: 'group_name', label: '群名变更', group: '群信息', prompt: 'The group name changed. React briefly in character if appropriate.' },
-    { on: 'title', label: '头衔变更', group: '群信息', prompt: 'A member\'s group title changed. React briefly in character if appropriate.' },
-    { on: 'honor', label: '群荣誉', group: '群信息', prompt: 'A member received a group honor. React briefly in character if appropriate.' },
-    { on: 'lucky_king', label: '运气王', group: '群信息', prompt: 'Someone won the lucky king red packet. React briefly in character if appropriate.' },
-    { on: 'group_joined', label: '机器人入群', group: '机器人', prompt: 'You just joined this group. Say hello briefly in character.' },
-    { on: 'poke', label: '戳一戳', group: '机器人', prompt: 'Someone poked you. Respond in character with a short reaction.' },
-    { on: 'friend_add', label: '新好友', group: '好友', prompt: 'You have a new friend. Say hello briefly in character.' },
-    { on: 'friend_recall', label: '好友撤回', group: '好友', prompt: 'Your friend recalled a message. React briefly in character.' },
-    { on: 'group_request', label: '加群申请', group: '申请', prompt: 'A group join request arrived. Use tools such as call_ob11_api with set_group_add_request to handle it, then reply briefly if appropriate.' },
-    { on: 'friend_request', label: '好友申请', group: '申请', prompt: 'A friend request arrived. Use tools such as call_ob11_api with set_friend_add_request to handle it, then reply briefly if appropriate.' },
+    { on: 'group_increase', label: '入群', group: '群成员' },
+    { on: 'group_decrease', label: '退群', group: '群成员' },
+    { on: 'group_admin', label: '管理变更', group: '群成员' },
+    { on: 'group_ban', label: '禁言', group: '群成员' },
+    { on: 'group_card', label: '名片变更', group: '群成员' },
+    { on: 'group_recall', label: '撤回', group: '群消息' },
+    { on: 'group_upload', label: '文件上传', group: '群消息' },
+    { on: 'group_msg_emoji_like', label: '表情回应', group: '群消息' },
+    { on: 'essence', label: '精华消息', group: '群消息' },
+    { on: 'group_name', label: '群名变更', group: '群信息' },
+    { on: 'title', label: '头衔变更', group: '群信息' },
+    { on: 'honor', label: '群荣誉', group: '群信息' },
+    { on: 'lucky_king', label: '运气王', group: '群信息' },
+    { on: 'group_joined', label: '机器人入群', group: '机器人' },
+    { on: 'poke', label: '戳一戳', group: '机器人' },
+    { on: 'friend_add', label: '新好友', group: '好友' },
+    { on: 'friend_recall', label: '好友撤回', group: '好友' },
+    { on: 'group_request', label: '加群申请', group: '申请' },
+    { on: 'friend_request', label: '好友申请', group: '申请' },
 ];
 
 /** 下拉分组（按 group 字段聚合，保持 EVENT_TABLE 顺序） */
@@ -71,10 +70,6 @@ export const EVENT_GROUPS = EVENT_TABLE.reduce((groups, event) => {
 
 export const EVENT_NAMES = EVENT_TABLE.map(item => item.on);
 export const EVENT_LABELS = Object.fromEntries(EVENT_TABLE.map(item => [item.on, item.label]));
-export const PRESET_PROMPTS = Object.fromEntries(EVENT_TABLE.map(item => [item.on, item.prompt]));
-
-/** 自定义事件（不在事件表里）的兜底预设提示词 */
-export const GENERIC_PRESET = 'An event occurred. React in character if appropriate.';
 
 /** 选中事件时自动带入的预设条件（可删）；只有「戳一戳」带默认条件 */
 export const DEFAULT_MATCH = {
@@ -111,12 +106,6 @@ export function flattenEventName(value) {
     if (name.startsWith('notify.')) return name.slice('notify.'.length);
     return name;
 }
-
-/** 事件对应的英文预设提示词；自定义事件用通用兜底 */
-export function presetFor(on) {
-    return PRESET_PROMPTS[on] || GENERIC_PRESET;
-}
-
 /** 事件的显示名（卡片标题）；自定义事件显示事件名本身 */
 export function eventLabel(on) {
     return EVENT_LABELS[on] || String(on ?? '').trim();
@@ -143,17 +132,13 @@ function isTrueValue(value) {
 }
 
 /**
- * 事件切换时套用预设（供编辑面板 onFieldChange 使用，纯函数便于 node 测试）：
- * - prompt 为空 / 仍等于上一事件的预设 → 填新事件预设；用户改过则不动；
+ * 事件切换时只套用默认条件（供编辑面板 onFieldChange 使用，纯函数便于 node 测试）：
+ * 提示词始终由用户自己写，不自动填充；
  * - match 与上一事件的默认条件一致 → 换成新事件默认条件；
  *   否则保留用户条件，并补上/移除对应事件的预设条件（只动预设那几行）。
  */
 export function applyEventSelection(draft, prevOn, nextOn) {
     draft.on = nextOn;
-    const prompt = typeof draft.prompt === 'string' ? draft.prompt : '';
-    const prevPreset = presetFor(prevOn);
-    const nextPreset = presetFor(nextOn);
-    if (!prompt.trim() || prompt === prevPreset) draft.prompt = nextPreset;
 
     const prevDefault = DEFAULT_MATCH[prevOn] || [];
     const nextDefault = DEFAULT_MATCH[nextOn] || [];
@@ -374,6 +359,15 @@ export function normalizeEventTriggerRule(item, problems, path, warnings) {
     // ---- match
     const match = readMatch(src.match, `${p}.match`, problems, warnings);
 
+    let prompt = '';
+    if (src.prompt !== undefined && src.prompt !== null) {
+        if (typeof src.prompt !== 'string') {
+            problems.push(issue(`${p}.prompt`, 'prompt 必须是字符串（可留空）'));
+        } else {
+            prompt = src.prompt;
+        }
+    }
+
     return {
         on,
         customOn,
@@ -381,7 +375,7 @@ export function normalizeEventTriggerRule(item, problems, path, warnings) {
         sessions,
         exclude,
         match,
-        prompt: typeof src.prompt === 'string' ? src.prompt : '',
+        prompt,
         // enabled 只是生成器的 UI 开关，不写进 JSON；这里从草稿 / 旧配置里恢复状态
         enabled: src.enabled !== false,
     };
@@ -472,8 +466,8 @@ export function validateEventTriggerRules(items) {
         }
         match.forEach((row, j) => validateCondition(row, `${path}.match[${j}]`, problems));
 
-        if (typeof item.prompt !== 'string' || !item.prompt.trim()) {
-            problems.push(issue(`${path}.prompt`, `prompt 必填（1~${MAX_PROMPT} 字）`));
+        if (typeof item.prompt !== 'string') {
+            problems.push(issue(`${path}.prompt`, 'prompt 必须是字符串（可留空）'));
         } else if (item.prompt.length > MAX_PROMPT) {
             problems.push(issue(`${path}.prompt`, `prompt 最长 ${MAX_PROMPT} 字（当前 ${item.prompt.length} 字）`));
         }
@@ -620,14 +614,8 @@ export const eventTriggerSpec = {
             label: '触发提示词',
             type: 'textarea',
             rows: 8,
-            required: true,
-            actionLabel: '恢复预设提示词',
-            onAction(draft) {
-                draft.prompt = presetFor(draft.on);
-                return true;
-            },
-            placeholder: PRESET_PROMPTS.group_increase,
-            note: `1~4000 字；选中事件时自动填充英文预设（不提供中文预设）。可编辑；点「恢复预设提示词」还原。占位符：${PROMPT_PLACEHOLDERS}（未知占位符渲染为空）。`,
+            placeholder: '可留空：事件本身已进入上下文；留空时只触发 AI 对事件做出响应，不附加额外指令',
+            note: `0~${MAX_PROMPT} 字，可留空（事件接收已把事件写进上下文；留空 = 只触发响应，不附加指令）。占位符：${PROMPT_PLACEHOLDERS}（未知占位符渲染为空）。`,
         },
         {
             key: 'scope',
@@ -681,7 +669,7 @@ export const eventTriggerSpec = {
             sessions: [],
             exclude: [],
             match: [],
-            prompt: PRESET_PROMPTS[EVENT_TABLE[0].on],
+            prompt: '',
             enabled: true,
         };
     },

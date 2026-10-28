@@ -8,9 +8,9 @@ import { mcpSpec, parseMcpDocument, maskMcp } from '../js/domains/mcp.js';
 import { kbSpec, kbFromFile } from '../js/domains/kb.js';
 import {
     eventTriggerSpec, eventTriggerFromFile, normalizeEventTriggerRule,
-    EVENT_TABLE, EVENT_NAMES, EVENT_GROUPS, EVENT_LABELS, PRESET_PROMPTS, GENERIC_PRESET,
+    EVENT_TABLE, EVENT_NAMES, EVENT_GROUPS, EVENT_LABELS,
     DEFAULT_MATCH, applyEventSelection, parseConditionsText, CONDITION_FIELDS, MATCH_FIELDS,
-    eventLabel, presetFor,
+    eventLabel,
 } from '../js/domains/event-trigger.js';
 import { DOMAIN_SPECS } from '../js/domains/index.js';
 import { DEFAULT_KB, DEFAULT_MCP, DEFAULT_ROLES, DEFAULT_SKILLS } from '../js/domains/default-data.js';
@@ -60,14 +60,11 @@ console.log('\n=== 事件触发：事件表 / 中文短名 / 英文预设 ===');
     eq('入群中文名', EVENT_LABELS.group_increase, '入群');
     eq('戳一戳中文名', EVENT_LABELS.poke, '戳一戳');
     eq('加群申请中文名', EVENT_LABELS.group_request, '加群申请');
-    check('每个事件都有英文预设', EVENT_TABLE.every(event => event.prompt.trim().length > 20 && /[A-Za-z]/.test(event.prompt)));
     check('事件表不含 notify.* 复合名', EVENT_TABLE.every(event => !event.on.includes('notify.')));
     check('不提供 profile_like / gray_tip / input_status',
         !EVENT_NAMES.includes('profile_like') && !EVENT_NAMES.includes('gray_tip') && !EVENT_NAMES.includes('input_status'));
     eq('eventLabel 已知事件 → 中文短名', eventLabel('group_increase'), '入群');
     eq('eventLabel 自定义事件 → 事件名', eventLabel('my_event'), 'my_event');
-    eq('presetFor 已知事件', presetFor('group_increase'), PRESET_PROMPTS.group_increase);
-    eq('presetFor 自定义事件 → 通用兜底', presetFor('my_event'), GENERIC_PRESET);
     eq('戳一戳默认条件', JSON.stringify(DEFAULT_MATCH.poke), JSON.stringify([{ field: 'is_target_bot', equals: true }]));
     eq('其他事件无默认条件', DEFAULT_MATCH.group_increase, undefined);
     eq('match 字段白名单与插件一致', MATCH_FIELDS.length, 13);
@@ -78,32 +75,21 @@ console.log('\n=== 事件触发：事件表 / 中文短名 / 英文预设 ===');
         && CONDITION_FIELDS.some(field => field.value === 'request_type' && field.kind === 'enum'));
 }
 
-console.log('\n=== 事件触发：选中事件时的预设行为 ===');
+console.log('\n=== 事件触发：切换事件只套用默认条件，提示词不自动填充 ===');
 {
-    const draft = { on: 'group_increase', prompt: PRESET_PROMPTS.group_increase, match: [] };
+    const draft = { on: 'group_increase', prompt: '', match: [] };
     applyEventSelection(draft, 'group_increase', 'poke');
-    eq('切到戳一戳：自动填英文预设', draft.prompt, PRESET_PROMPTS.poke);
     eq('切到戳一戳：自动带 is_target_bot 条件',
         JSON.stringify(draft.match), JSON.stringify([{ field: 'is_target_bot', equals: true }]));
+    eq('提示词保持为空（不自动填充）', draft.prompt, '');
 
     draft.prompt = '自定义提示词';
     applyEventSelection(draft, 'poke', 'group_decrease');
-    eq('改过的 prompt 切换事件不覆盖', draft.prompt, '自定义提示词');
     eq('切走戳一戳后默认条件移除', JSON.stringify(draft.match), '[]');
-
-    draft.prompt = presetFor(draft.on);
-    eq('恢复预设提示词（面板按钮的纯逻辑）', draft.prompt, PRESET_PROMPTS.group_decrease);
-
-    const blank = { on: 'group_increase', prompt: '', match: [] };
-    applyEventSelection(blank, 'group_increase', 'friend_add');
-    eq('空 prompt 切事件自动填预设', blank.prompt, PRESET_PROMPTS.friend_add);
-
-    const custom = { on: 'group_increase', prompt: PRESET_PROMPTS.group_increase, match: [] };
-    applyEventSelection(custom, 'group_increase', '');
-    eq('切到自定义事件填通用兜底', custom.prompt, GENERIC_PRESET);
+    eq('自定义提示词不被切换覆盖', draft.prompt, '自定义提示词');
 
     // 用户自己的条件不被事件切换冲掉
-    const userMatch = { on: 'group_increase', prompt: PRESET_PROMPTS.group_increase, match: [{ field: 'user_id', equals: 'QQ:1' }] };
+    const userMatch = { on: 'group_increase', prompt: '', match: [{ field: 'user_id', equals: 'QQ:1' }] };
     applyEventSelection(userMatch, 'group_increase', 'poke');
     eq('用户条件保留，另补戳一戳默认条件',
         JSON.stringify(userMatch.match),
@@ -133,7 +119,7 @@ console.log('\n=== 五个分区输出结构 ===');
     const et = eventTriggerSpec.build([{
         on: 'group_increase', platforms: ['QQ'], sessions: ['QQ-Group:1'], exclude: [],
         match: [{ field: 'sub_type', equals: 'approve' }, { field: 'user_id', regex: '^QQ:100' }],
-        prompt: PRESET_PROMPTS.group_increase,
+        prompt: '',
     }]);
     eq('事件触发 version', et.version, 1);
     eq('事件触发 on 输出单个字符串', et.rules[0].on, 'group_increase');
@@ -298,7 +284,7 @@ console.log('\n=== 非法输入必须拒绝 ===');
         ['知识库重复', kbSpec, '{"version":1,"libraries":[{"name":"K","content":"1"},{"name":"K","content":"2"}]}'],
         ['事件触发缺 on', eventTriggerSpec, '{"version":1,"rules":[{"prompt":"x"}]}'],
         ['事件触发 on 为空字符串', eventTriggerSpec, '{"version":1,"rules":[{"on":"","prompt":"x"}]}'],
-        ['事件触发缺 prompt', eventTriggerSpec, '{"version":1,"rules":[{"on":"group_increase"}]}'],
+        ['事件触发 prompt 非字符串', eventTriggerSpec, '{"version":1,"rules":[{"on":"group_increase","prompt":123}]}'],
         ['事件触发 version 非法', eventTriggerSpec, '{"version":2,"rules":[]}'],
         ['事件触发缺 rules', eventTriggerSpec, '{"version":1}'],
         ['事件触发 on 非法字符', eventTriggerSpec, '{"version":1,"rules":[{"on":"bad.name","prompt":"x"}]}'],
