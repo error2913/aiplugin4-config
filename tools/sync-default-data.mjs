@@ -122,6 +122,7 @@ const DEFAULT_MCP_SOURCE = [
         url: 'http://127.0.0.1:46680/mcp',
         token: '',
         headers: { Authorization: 'Bearer token' },
+        imageRefs: true,
     },
 ];
 

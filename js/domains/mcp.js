@@ -68,6 +68,8 @@ export function normalizeServer(item, problems, path) {
         url: typeof src.url === 'string' ? src.url.trim() : '',
         token: typeof src.token === 'string' ? src.token : '',
         headers,
+        // 图片引用生产者扩展字段（image-host 等）：true 时插件会把结果里的 [img:<sha>] 规范化
+        ...(src.imageRefs === true ? { imageRefs: true } : {}),
     };
 }
 
@@ -119,6 +121,7 @@ export function buildMcp(items) {
         const entry = { type: item.type || 'http', url: item.url };
         if (Object.keys(headers).length > 0) entry.headers = headers;
         if (item.platform && item.platform.length > 0) entry.platform = item.platform;
+        if (item.imageRefs === true) entry.imageRefs = true;
         mcpServers[item.name.trim()] = entry;
     }
     return { mcpServers };
