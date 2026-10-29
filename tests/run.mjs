@@ -176,7 +176,7 @@ console.log('\n=== 用途 × 模型类型（必须与插件 isEligible 一致）
     check('image-generation 只接受 gen', el('image-generation', 'gen') && !el('image-generation', 'text'));
     check('tts 只接受 tts', el('tts', 'tts') && !el('tts', 'text'));
     // 对话类：排除 embed/gen/tts
-    for (const u of ['chat', 'compression', 'summarization', 'judge']) {
+    for (const u of ['chat', 'summarization', 'judge']) {
         check(`${u} 接受 text`, el(u, 'text'));
         check(`${u} 接受 vision`, el(u, 'vision'));
         check(`${u} 排除 embed`, !el(u, 'embed'));
@@ -351,10 +351,10 @@ console.log('\n=== 用途组 body 覆盖（DEFAULT_USE_BODIES / build 第三参�
     const cfg4 = build(provs, { chat: 'm1' });
     check('未绑定的用途不产组', cfg4.groups.length === 1, JSON.stringify(cfg4.groups.map(g => g.purposes)));
 
-    const cfg5 = build(provs, { chat: 'm1', compression: 'm1', 'image-understanding': 'm1', 'text-embedding': 'm1' });
+    const cfg5 = build(provs, { chat: 'm1', summarization: 'm1', judge: 'm1', 'image-understanding': 'm1', 'text-embedding': 'm1' });
     const chatG = cfg5.groups.find(g => g.purposes.includes('chat'));
-    check('chat 系四个用途共用一个组',
-        JSON.stringify(chatG.purposes) === JSON.stringify(['chat', 'compression', 'summarization', 'judge']),
+    check('chat 系三个用途共用一个组',
+        JSON.stringify(chatG.purposes) === JSON.stringify(['chat', 'summarization', 'judge']),
         JSON.stringify(chatG.purposes));
 }
 
@@ -479,6 +479,55 @@ console.log('\n=== 导入：非标准用途组原样保留 + 警告 ===');
     // 再往返一次仍稳定
     const r2 = parseImport(serialize(out));
     check('二次往返仍稳定', r2.ok && r2.state.extraGroups.length === 1, JSON.stringify(r2.warnings));
+}
+
+console.log('\n=== 导入：旧配置里的 compression 用途被清洗 + 警告 ===');
+{
+    // 插件侧已彻底移除 compression（ChatModelUse / schema / 出厂配置都没有了）。
+    // 旧导出/手写配置里还带着它 —— 不能因此让整份导入失败，必须先清洗再校验。
+    const mkLegacy = () => ({
+        version: 5,
+        providers: [{
+            api: 'openai-completions', baseURL: 'https://api.deepseek.com/v1', apiKey: 'k',
+            models: [{ id: 'm', name: 'deepseek-chat' }],
+        }],
+        purposes: { chat: 'm', compression: 'm' },
+        groups: [
+            { purposes: ['chat', 'compression', 'summarization', 'judge'], body: { max_tokens: 5 } },
+            { purposes: ['compression'], body: { max_tokens: 9 } },
+        ],
+    });
+
+    // 前提：不清理时这份旧配置**就是非法的** —— 这正是"先清洗再校验"的原因
+    check('未清理的旧配置会被判非法（未知用途 compression）',
+        validateConfig(mkLegacy()).some(p => /compression/.test(p.path + p.msg)),
+        JSON.stringify(validateConfig(mkLegacy())));
+
+    const r = parseImport(JSON.stringify(mkLegacy()));
+    check('含 compression 的旧配置导入成功', r.ok, JSON.stringify(r.issues));
+    check('  给出明确警告', r.warnings.some(w => /压缩/.test(w)), JSON.stringify(r.warnings));
+    check('  用途绑定里 compression 已剔除', !('compression' in r.state.purposes),
+        JSON.stringify(r.state.purposes));
+    check('  chat 组里的 compression 被过滤（body 仍还原）',
+        JSON.stringify(r.state.useBodies.chat) === '{"max_tokens":5}', JSON.stringify(r.state.useBodies));
+    check('  只含 compression 的组被删除（不残留成 extraGroups）',
+        r.state.extraGroups.length === 0, JSON.stringify(r.state.extraGroups));
+
+    // 再导出：配置合法、且彻底不再出现 compression
+    const out = build(r.state.providers, r.state.purposes, r.state.useBodies, r.state.extraGroups);
+    check('  导出后配置合法', validateConfig(out).length === 0, JSON.stringify(validateConfig(out)));
+    check('  导出后不再出现 compression', !serialize(out).includes('compression'), serialize(out));
+    check('  导出后 chat 组是三项',
+        JSON.stringify(out.groups[0].purposes) === JSON.stringify(['chat', 'summarization', 'judge']),
+        JSON.stringify(out.groups));
+
+    // 极端情况：只绑了 compression（别的用途都没有）→ 清洗后成了空绑定，也不能报错
+    const only = mkLegacy();
+    delete only.purposes.chat;
+    const r2 = parseImport(JSON.stringify(only));
+    check('只绑了 compression 的旧配置也能导入', r2.ok, JSON.stringify(r2.issues));
+    check('  清洗后没有任何用途绑定', Object.keys(r2.state.purposes).length === 0,
+        JSON.stringify(r2.state.purposes));
 }
 
 console.log('\n=== 导入：绑了用途但配置里没有对应分组 body → 提示会补默认 ===');
@@ -627,7 +676,7 @@ console.log('\n=== 模板数据 ===');
     check('除 custom 外都有默认 baseUrl', nonCustom.every(t => /^https:\/\//.test(t.baseUrl)));
     check('每个模板都有 cors 标注', PROVIDER_TEMPLATES.every(t => !!t.cors));
     check('api 枚举与协议表一致', PROVIDER_TEMPLATES.every(t => API_DIALECTS.some(a => a.value === t.api)));
-    check('8 个用途', PURPOSES.length === 8, String(PURPOSES.length));
+    check('7 个用途', PURPOSES.length === 7, String(PURPOSES.length));
     check('5 种 kind', KIND_VALUES.length === 5);
     const ids = PROVIDER_TEMPLATES.map(t => t.id);
     check('模板 id 无重复', new Set(ids).size === ids.length);

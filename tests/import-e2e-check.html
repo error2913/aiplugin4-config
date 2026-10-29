@@ -74,7 +74,7 @@ frame.onload = async () => {
         // 规范形态：purposes 的值是**有序数组**（生成器统一写数组）
         purposes: { chat: ['sonnet'], 'image-understanding': ['sonnet'], 'image-generation': ['flux'] },
         groups: [
-            { purposes: ['chat', 'compression', 'summarization', 'judge'], body: { temperature: 0.7, max_tokens: 4096 } },
+            { purposes: ['chat', 'summarization', 'judge'], body: { temperature: 0.7, max_tokens: 4096 } },
             { purposes: ['image-understanding'], body: { max_tokens: 2048 } },
         ],
     };

@@ -273,10 +273,9 @@ export function templateIdForBaseUrl(baseUrl, api) {
     return hit ? hit.id : 'custom';
 }
 
-/** 8 个用途（对应 v5 的 purposes） */
+/** 7 个用途（对应 v5 的 purposes） */
 export const PURPOSES = [
     { key: 'chat', label: '对话', hint: '主对话' },
-    { key: 'compression', label: '压缩', hint: '上下文压缩' },
     { key: 'summarization', label: '总结', hint: '会话总结' },
     { key: 'judge', label: '评判', hint: '评分/判定' },
     { key: 'image-understanding', label: '图片识别', hint: '需 kind = vision' },

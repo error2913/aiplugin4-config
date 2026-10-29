@@ -9,6 +9,7 @@ import { decideKind } from './classify.js';
 import {
     validate, build, serialize, serializePretty, maskKeys, parseImport,
     uniqueModelId, collectModelIds, isEligibleKind, normalizePurposeList,
+    stripRemovedPurposes,
 } from './v5.js';
 import { fetchModelList, FetchError, sortModelEntries } from './fetch-models.js';
 import { apiKeyInput, openImportDialog, pickFiles, readFileText } from './ui.js';
@@ -88,7 +89,10 @@ function loadDraft() {
                 timeout: p.timeout || 0,
                 request: p.request || {},
             })),
-            purposes: d.purposes && typeof d.purposes === 'object' ? d.purposes : {},
+            // 剔除已移除的用途（如旧版的 compression）—— 老草稿不报错，也不会渲染出幽灵用途卡片
+            purposes: stripRemovedPurposes(
+                d.purposes && typeof d.purposes === 'object' ? d.purposes : {},
+            ),
             // 旧存档没有这个键 → 兜底成 {}（否则 renderPurposes 读 state.useBodies[key] 会抛）
             useBodies: d.useBodies && typeof d.useBodies === 'object' ? d.useBodies : {},
             extraGroups: Array.isArray(d.extraGroups) ? d.extraGroups : [],
@@ -991,7 +995,7 @@ function buildPurposesInto(wrap) {
     const useBodies = state.useBodies || {};   // 旧存档/外部赋值可能没有这个键
     const boundKeys = new Set(Object.keys(state.purposes).filter(k => normalizePurposeList(state.purposes[k]).length > 0));
     const groupKeys = [
-        { key: 'chat', members: ['chat', 'compression', 'summarization', 'judge'], label: '对话 / 压缩 / 总结 / 评判' },
+        { key: 'chat', members: ['chat', 'summarization', 'judge'], label: '对话 / 总结 / 评判' },
         { key: 'image-understanding', members: ['image-understanding'], label: '识图' },
         { key: 'text-embedding', members: ['text-embedding'], label: '向量记忆（嵌入）' },
     ].filter(g => g.members.some(u => boundKeys.has(u)));
@@ -1569,7 +1573,7 @@ $('fileImportBtn').onclick = () => pickFiles({
  * 之前这个对象只写在启动分支里，想"看修改效果"就只能手动清 localStorage。
  *
  * 与**插件的出厂默认**（`src/config/v5/default.ts`）保持一致：
- * 一条 DeepSeek 连接 + 两个模型（flash=vision / pro=text）+ 四个对话类用途全绑 flash。
+ * 一条 DeepSeek 连接 + 两个模型（flash=vision / pro=text）+ 三个对话类用途全绑 flash。
  *
  * 模型**显式声明 kind**：插件侧视觉已不再靠命名猜测（catalog.ts 删掉了
  * GENERIC_VISION_PATTERNS），不声明就只能指望接口自报能力位，而模型列表拉取失败
@@ -1587,7 +1591,7 @@ function factoryState() {
             ],
             enabled: true, displayName: '', timeout: 0, request: {},
         }],
-        purposes: { chat: ['flash'], compression: ['flash'], summarization: ['flash'], judge: ['flash'] },
+        purposes: { chat: ['flash'], summarization: ['flash'], judge: ['flash'] },
         useBodies: {},
         extraGroups: [],
     };

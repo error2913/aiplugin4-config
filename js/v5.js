@@ -34,7 +34,7 @@ const KEY_CHARS_RE = /^[\x21-\x7E]+$/;
  *   image-understanding → 只接受 vision
  *   image-generation    → 只接受 gen
  *   tts                 → 只接受 tts
- *   chat/压缩/总结/评判  → 接受除 embed/gen/tts 外的（即 text / vision）
+ *   chat/总结/评判      → 接受除 embed/gen/tts 外的（即 text / vision）
  */
 export function isEligibleKind(use, kind) {
     const k = kind || 'text';
@@ -228,9 +228,9 @@ export const DEFAULT_USE_BODIES = {
     'text-embedding': { encoding_format: 'float', dimensions: 1024 },
 };
 
-/** 用途组的分组方式：哪些用途共用一个 body（chat 系四个共享） */
+/** 用途组的分组方式：哪些用途共用一个 body（chat 系三个共享） */
 const GROUP_MEMBERS = {
-    chat: ['chat', 'compression', 'summarization', 'judge'],
+    chat: ['chat', 'summarization', 'judge'],
     'image-understanding': ['image-understanding'],
     'text-embedding': ['text-embedding'],
 };
@@ -254,7 +254,7 @@ function defaultGroups(purposes, useBodies, extraGroups) {
         if (!members.some(u => used.has(u))) continue;
         // 该族**只要有一个**用途被非标准分组覆盖，就整族交给那些分组。
         // 不能只剔除被覆盖的那个：那会造出一个**新的非标准分组**
-        // （如 [compression,summarization,judge]），于是反复导入导出时分组不断增殖。
+        // （如 [summarization,judge]），于是反复导入导出时分组不断增殖。
         if (members.some(u => covered.has(u))) continue;
         const override = useBodies && useBodies[key];
         const body = override && typeof override === 'object' && !Array.isArray(override)
@@ -362,6 +362,28 @@ export function collectModelIds(providers) {
 
 // ---------------------------------------------------------------- 导入（build 的逆）
 
+/**
+ * 已从插件与生成器中**彻底移除**的用途（`ChatModelUse` / schema / 出厂配置都不再有）。
+ * 旧导出、老草稿、手写配置里仍可能带着它们。
+ */
+export const REMOVED_PURPOSES = ['compression'];
+
+/**
+ * 剔除已移除的用途绑定，返回**新对象**（不改入参）。
+ *
+ * `parseImport()`（导入旧配置）与 `app.js` 的 `loadDraft()`（读旧浏览器草稿）共用，
+ * 避免两处各写一份规则。
+ */
+export function stripRemovedPurposes(purposes) {
+    const out = {};
+    if (!purposes || typeof purposes !== 'object' || Array.isArray(purposes)) return out;
+    for (const [k, v] of Object.entries(purposes)) {
+        if (REMOVED_PURPOSES.includes(k)) continue;
+        out[k] = v;
+    }
+    return out;
+}
+
 /** 判断两个用途数组是否为同一集合（忽略顺序） */
 function samePurposeSet(a, b) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
@@ -377,6 +399,9 @@ function samePurposeSet(a, b) {
  *   - `purposes` → 用途绑定
  *   - `groups[]` → 命中已知分组的 body 进 `useBodies`；**其余原样留在 `extraGroups`**
  *   - `models[].request` / `bodyMode` / `contextWindow` / `maxTokens` 全部保留
+ *
+ * 旧配置兼容：已移除的用途（见 `REMOVED_PURPOSES`，目前是 compression）会在
+ * **校验之前**被清洗掉并给出警告 —— 否则旧导出会被判"未知用途"而整份导入失败。
  *
  * 为什么要有 `extraGroups`：本工具只认三种固定分组（对话系/识图/嵌入），
  * 手写配置可能有别的分组方式。丢掉它们等于**静默改坏用户配置**，所以原样保留并**明确警告**。
@@ -394,6 +419,32 @@ export function parseImport(text) {
     } catch (e) {
         return { ok: false, issues: [{ path: '$', msg: 'JSON 语法错误：' + (e && e.message ? e.message : String(e)) }], warnings };
     }
+
+    // ---- 旧配置清洗（**必须在 validateConfig 之前**）----
+    // compression 用途已随插件 v5 方案彻底移除。旧导出/手写配置里还带着它时，
+    // 直接校验会被判"未知用途"→ 整份导入失败（用户看到的是"我的配置突然坏了"）。
+    // 所以先剔除再校验，并明确告知改了什么（不静默改用户数据）。
+    let strippedLegacy = false;
+    if (cfg && typeof cfg === 'object' && !Array.isArray(cfg)) {
+        if (cfg.purposes && typeof cfg.purposes === 'object' && !Array.isArray(cfg.purposes)) {
+            const cleaned = stripRemovedPurposes(cfg.purposes);
+            if (Object.keys(cleaned).length !== Object.keys(cfg.purposes).length) strippedLegacy = true;
+            cfg.purposes = cleaned;
+        }
+        if (Array.isArray(cfg.groups)) {
+            const keptGroups = [];
+            for (const g of cfg.groups) {
+                if (!g || typeof g !== 'object' || !Array.isArray(g.purposes)) { keptGroups.push(g); continue; }
+                const filtered = g.purposes.filter(u => !REMOVED_PURPOSES.includes(u));
+                if (filtered.length !== g.purposes.length) strippedLegacy = true;
+                // 过滤后为空的组直接删除（插件侧也不接受空 purposes 的组）
+                if (filtered.length === 0) continue;
+                keptGroups.push({ ...g, purposes: filtered });
+            }
+            cfg.groups = keptGroups;
+        }
+    }
+    if (strippedLegacy) warnings.push('旧配置中的「压缩」用途已移除，已自动忽略。');
 
     // 与插件同口径校验（validateConfig 已包含 version 检查）
     const issues = validateConfig(cfg);

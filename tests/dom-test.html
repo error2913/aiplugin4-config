@@ -59,9 +59,9 @@ f.onload = async () => {
             check('每块都有标题与顺序摘要',
                 blocks.every(b => b.querySelector('.purpose-label') && b.querySelector('.purpose-order')));
 
-            // 出厂示例绑了 chat/compression/summarization/judge 四个用途（各 1 个 flash）
+            // 出厂示例绑了 chat/summarization/judge 三个用途（各 1 个 flash；compression 已移除）
             const pickedAll = qa('.purpose-chip.picked');
-            check('已绑定卡片数与出厂绑定一致', pickedAll.length === 4, String(pickedAll.length));
+            check('已绑定卡片数与出厂绑定一致', pickedAll.length === 3, String(pickedAll.length));
             check('已绑定卡片的角标都是 1（各用途只绑一个）',
                 pickedAll.every(c => c.querySelector('.rank-badge').textContent === '1'),
                 JSON.stringify(pickedAll.map(c => c.querySelector('.rank-badge').textContent)));
@@ -421,7 +421,7 @@ f.onload = async () => {
             gta.dispatchEvent(new w.Event('input', { bubbles: true }));
             await sleep(40);
             check('用途组 body 覆盖写进 groups',
-                /"groups":\[\{"purposes":\["chat","compression","summarization","judge"\],"body":\{"max_tokens":321\}\}\]/.test(preview()),
+                /"groups":\[\{"purposes":\["chat","summarization","judge"\],"body":\{"max_tokens":321\}\}\]/.test(preview()),
                 preview().slice(0, 400));
             check('覆盖后配置仍合法',
                 d.getElementById('copyBtn').disabled === false,
@@ -924,9 +924,9 @@ f.onload = async () => {
                 cfg.providers[0].models[0].kind === 'vision', String(cfg.providers[0].models[0].kind));
             check('  pro 声明 kind=text', cfg.providers[0].models[1].kind === 'text',
                 String(cfg.providers[0].models[1].kind));
-            check('  四个对话类用途全绑 flash',
+            check('  三个对话类用途全绑 flash',
                 JSON.stringify(cfg.purposes) === JSON.stringify({
-                    chat: ['flash'], compression: ['flash'], summarization: ['flash'], judge: ['flash'],
+                    chat: ['flash'], summarization: ['flash'], judge: ['flash'],
                 }), JSON.stringify(cfg.purposes));
 
             // 界面上也要对得上：卡片角标、模型行。
