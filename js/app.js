@@ -1,7 +1,7 @@
 // 主应用：供应商卡片（一级） + 编辑面板（二级） + v5 输出。
 // 交互设计见 aiplugin4 仓库 docs/13-模型配置v5方案.md 第 9.2 节。
 import {
-    PROVIDER_TEMPLATES, API_DIALECTS, MODEL_KINDS, PURPOSES, KNOWN_VENDORS,
+    PROVIDER_TEMPLATES, API_DIALECTS, MODEL_KINDS, PURPOSES, KNOWN_VENDORS, PURPOSE_MODEL_HINTS,
     getTemplate, templateIdForBaseUrl,
     resolveVendorFromUrl, MEDIA_VENDOR_USES, providerForTemplate, vendorLabel,
 } from './templates.js';
@@ -9,7 +9,7 @@ import { decideKind } from './classify.js';
 import {
     validate, build, serialize, serializePretty, maskKeys, parseImport,
     uniqueModelId, collectModelIds, isEligibleKind, normalizePurposeList,
-    stripRemovedPurposes,
+    stripRemovedPurposes, JUDGE_PRESET_BODY,
 } from './v5.js';
 import { fetchModelList, FetchError, sortModelEntries } from './fetch-models.js';
 import { apiKeyInput, openImportDialog, pickFiles, readFileText } from './ui.js';
@@ -28,6 +28,8 @@ let state = {
     useBodies: {},
     /** 导入时保留下来的非标准用途组（原样导出；见 v5.js 的 parseImport） */
     extraGroups: [],
+    /** 可选的判定请求体预设（§12.3）；默认关闭 = 输出与旧版逐字节一致 */
+    judgePreset: false,
 };
 
 /** 编辑面板的草稿（与 state 隔离，取消即丢弃） */
@@ -55,6 +57,7 @@ function scheduleSave() {
                 purposes: state.purposes,
                 useBodies: state.useBodies || {},
                 extraGroups: state.extraGroups || [],
+                judgePreset: state.judgePreset === true,
             }));
         } catch (e) {
             // 以前这里是空 catch —— 存储被禁（无痕/站点权限）或写满时**静默失败**，
@@ -96,6 +99,8 @@ function loadDraft() {
             // 旧存档没有这个键 → 兜底成 {}（否则 renderPurposes 读 state.useBodies[key] 会抛）
             useBodies: d.useBodies && typeof d.useBodies === 'object' ? d.useBodies : {},
             extraGroups: Array.isArray(d.extraGroups) ? d.extraGroups : [],
+            // 旧存档没有这个键 → 默认关闭（关闭时输出逐字节与旧版一致）
+            judgePreset: d.judgePreset === true,
         };
     } catch { return null; }
 }
@@ -915,6 +920,32 @@ function buildPurposesInto(wrap) {
     intro.textContent = '点卡片绑定，角标是取用顺序：先用 1，失败时顺着 2、3… 往后切。再点一次取消。';
     wrap.appendChild(intro);
 
+    // ---- 判定请求体预设（§12.3，默认关闭）
+    // 关闭时 build() 输出与旧版逐字节一致；开启且判定用途有绑定时，judge 从对话系组拆出、
+    // 独立成组（temperature 0 / max_tokens 300 / json_object），不再与 chat 的 body 冲突。
+    const presetWrap = el('div', 'purpose-preset');
+    const presetToggle = el('label', 'toggle');
+    const presetCb = el('input');
+    presetCb.type = 'checkbox';
+    presetCb.checked = state.judgePreset === true;
+    presetCb.title = '默认关闭。开启后若「评分 / 决策（判定）」绑定过模型，会在 groups[] 追加一个独立的 judge 用途组';
+    presetCb.addEventListener('change', () => {
+        state.judgePreset = presetCb.checked;
+        scheduleSave();
+        // 只重建用途区 + 输出：整面板重建会丢焦点
+        renderPurposesOnly();
+        renderOutput();
+    });
+    presetToggle.append(presetCb, document.createTextNode('判定请求体预设（默认关闭）'));
+    presetWrap.appendChild(presetToggle);
+    const presetNote = el('div', 'field-note');
+    presetNote.textContent = state.judgePreset
+        ? `已开启：「评分 / 决策（判定）」绑定模型后会追加 groups[] = {"purposes":["judge"],"body":${JSON.stringify(JUDGE_PRESET_BODY)}}。`
+        : '关闭时输出与旧版完全一致。开启后「评分 / 决策（判定）」独立成组：temperature 0、max_tokens 300、response_format={"type":"json_object"}；'
+            + '不按 vendor 猜「关思考」字段（插件请求体机制没有 vendor→思考开关预设，需要时在下方「用途组请求体」里自填 body.thinking 等）。';
+    presetWrap.appendChild(presetNote);
+    wrap.appendChild(presetWrap);
+
     for (const pu of PURPOSES) {
         // 只列该用途接受的 kind（对应插件 isEligible；否则会绑出一个插件运行时忽略的组合）
         const eligible = all.filter(m => isEligibleKind(pu.key, m.kind));
@@ -940,6 +971,14 @@ function buildPurposesInto(wrap) {
         }
         head.appendChild(summary);
         block.appendChild(head);
+
+        // hint 直接显示（此前只塞在 title 里 —— 触屏、截图、读屏都看不到）
+        const hintLine = el('div', 'field-note purpose-hint');
+        hintLine.textContent = pu.hint;
+        block.appendChild(hintLine);
+
+        // 判定用途额外给模型选型提示（只提示、不预选；绝不会自动改 purposes）
+        if (pu.key === 'judge') block.appendChild(judgeHintBlock());
 
         if (eligible.length === 0) {
             const why = el('div', 'field-note purpose-why');
@@ -994,11 +1033,19 @@ function buildPurposesInto(wrap) {
     // 只在真有绑定的用途组上出现（没绑就没有对应的 groups 项，改了也没用）。
     const useBodies = state.useBodies || {};   // 旧存档/外部赋值可能没有这个键
     const boundKeys = new Set(Object.keys(state.purposes).filter(k => normalizePurposeList(state.purposes[k]).length > 0));
-    const groupKeys = [
-        { key: 'chat', members: ['chat', 'summarization', 'judge'], label: '对话 / 总结 / 评判' },
+    // 预设开启时 judge 已拆出对话系组，这里也要跟着分成两个编辑区（否则改了 judge body 不生效）
+    const judgePresetOn = state.judgePreset === true;
+    const groupDefs = [
+        {
+            key: 'chat',
+            members: judgePresetOn ? ['chat', 'summarization'] : ['chat', 'summarization', 'judge'],
+            label: judgePresetOn ? '对话 / 总结' : '对话 / 总结 / 评分·决策（判定）',
+        },
         { key: 'image-understanding', members: ['image-understanding'], label: '识图' },
         { key: 'text-embedding', members: ['text-embedding'], label: '向量记忆（嵌入）' },
-    ].filter(g => g.members.some(u => boundKeys.has(u)));
+    ];
+    if (judgePresetOn) groupDefs.push({ key: 'judge', members: ['judge'], label: '判定（评分 / 决策）' });
+    const groupKeys = groupDefs.filter(g => g.members.some(u => boundKeys.has(u)));
 
     if (groupKeys.length) {
         const outer = el('details', 'json-editor group-bodies');
@@ -1026,6 +1073,36 @@ function buildPurposesInto(wrap) {
         outer.appendChild(obody);
         wrap.appendChild(outer);
     }
+}
+
+/**
+ * 判定用途的模型选型提示（§12.2）：数据来自 templates.js 的 PURPOSE_MODEL_HINTS。
+ * **只提示、不预选** —— 这里只渲染只读文本，不碰 state.purposes。
+ */
+function judgeHintBlock() {
+    const data = PURPOSE_MODEL_HINTS.judge;
+    const box = el('details', 'json-editor judge-hint');
+    const sum = document.createElement('summary');
+    sum.textContent = `${data.title}（只提示，不预选）`;
+    box.appendChild(sum);
+    const body = el('div', 'json-editor-body');
+    const intro = el('div', 'field-note');
+    intro.textContent = data.summary;
+    body.appendChild(intro);
+    const ul = document.createElement('ul');
+    for (const v of data.vendors) {
+        const li = document.createElement('li');
+        li.textContent = `${v.label}：${v.candidates.join(' / ')} · ${data.priceTierLabels[v.priceTier]} · `
+            + `结构化输出${data.capabilityLabels[v.structuredOutput]} · 思考${data.capabilityLabels[v.thinking]}`
+            + (v.note ? ` · ${v.note}` : '');
+        ul.appendChild(li);
+    }
+    body.appendChild(ul);
+    const disclaimer = el('div', 'field-note');
+    disclaimer.textContent = data.disclaimer;
+    body.appendChild(disclaimer);
+    box.appendChild(body);
+    return box;
 }
 
 /** 用途要求的模型类型说明（仅在无可用模型时提示用） */
@@ -1061,6 +1138,11 @@ function effectiveProviders() {
     return copy;
 }
 
+/** build() 的可选开关。默认全关 —— 关闭时 build 输出与旧版逐字节一致。 */
+function buildOptions() {
+    return { judgePreset: state.judgePreset === true };
+}
+
 function currentProblems() {
     return validate(effectiveProviders(), state.purposes);
 }
@@ -1072,7 +1154,7 @@ function serializeOutput(cfg) {
 
 function renderOutput() {
     const masked = $('maskKey').checked;
-    let cfg = build(effectiveProviders(), state.purposes, state.useBodies, state.extraGroups);
+    let cfg = build(effectiveProviders(), state.purposes, state.useBodies, state.extraGroups, buildOptions());
     if (masked) cfg = maskKeys(cfg);
     $('preview').textContent = serializeOutput(cfg);
 
@@ -1431,7 +1513,7 @@ function responseEditor(m, onChange) {
 // ---------------------------------------------------------------- 事件
 
 $('copyBtn').onclick = async () => {
-    const cfg = build(state.providers, state.purposes, state.useBodies, state.extraGroups);
+    const cfg = build(state.providers, state.purposes, state.useBodies, state.extraGroups, buildOptions());
     const text = serializeOutput($('maskKey').checked ? maskKeys(cfg) : cfg);
     try {
         await navigator.clipboard.writeText(text);
@@ -1447,7 +1529,7 @@ $('copyBtn').onclick = async () => {
 };
 
 $('downloadBtn').onclick = () => {
-    const cfg = build(state.providers, state.purposes, state.useBodies, state.extraGroups);
+    const cfg = build(state.providers, state.purposes, state.useBodies, state.extraGroups, buildOptions());
     const text = serializeOutput($('maskKey').checked ? maskKeys(cfg) : cfg);
     const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
     const a = document.createElement('a');
@@ -1459,7 +1541,7 @@ $('downloadBtn').onclick = () => {
 
 $('clearBtn').onclick = () => {
     if (state.providers.length && !confirm('清空全部连接？')) return;
-    state = { providers: [], purposes: {}, useBodies: {}, extraGroups: [] };
+    state = { providers: [], purposes: {}, useBodies: {}, extraGroups: [], judgePreset: false };
     try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     renderAll();
 };
@@ -1527,6 +1609,7 @@ function applyImportedState(res) {
         purposes: s.purposes,
         useBodies: s.useBodies,
         extraGroups: s.extraGroups,
+        judgePreset: s.judgePreset === true,
     };
     scheduleSave();
     renderAll();
@@ -1594,6 +1677,8 @@ function factoryState() {
         purposes: { chat: ['flash'], summarization: ['flash'], judge: ['flash'] },
         useBodies: {},
         extraGroups: [],
+        // 判定请求体预设默认关闭（§12.3）——出厂示例与插件出厂默认保持一致
+        judgePreset: false,
     };
 }
 

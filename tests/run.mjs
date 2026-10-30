@@ -1,9 +1,12 @@
 // v5 逻辑测试（纯 Node，不需要浏览器）。
 // 运行：node tests/run.mjs
-import { validate, validateConfig, build, serialize, maskKeys, uniqueModelId, collectModelIds, isEligibleKind, DEFAULT_USE_BODIES, parseImport } from '../js/v5.js';
+import {
+    validate, validateConfig, build, serialize, maskKeys, uniqueModelId, collectModelIds,
+    isEligibleKind, DEFAULT_USE_BODIES, JUDGE_PRESET_BODY, parseImport,
+} from '../js/v5.js';
 import { classifyModel, decideKind } from '../js/classify.js';
 import {
-    PROVIDER_TEMPLATES, API_DIALECTS, KIND_VALUES, PURPOSES, resolveVendorFromUrl,
+    PROVIDER_TEMPLATES, API_DIALECTS, KIND_VALUES, PURPOSES, PURPOSE_MODEL_HINTS, resolveVendorFromUrl,
     KNOWN_VENDORS, MEDIA_VENDORS, MEDIA_VENDOR_USES, providerForTemplate,
     vendorByEndpointPath, MEDIA_ENDPOINT_SUFFIXES,
 } from '../js/templates.js';
@@ -688,6 +691,204 @@ console.log('\n=== 拉取错误的分类文案（方案 9.3.2） ===');
     check('FetchError 带 kind 字段', new FetchError('cors', 'x').kind === 'cors');
     check('FetchError 是 Error 子类', new FetchError('auth', 'x') instanceof Error);
     check('kind 取值集合固定', kinds.length === 6);
+}
+
+console.log('\n=== 用途表守卫（§12.4）：键与顺序固定，judge = 评分 / 决策（判定） ===');
+{
+    // 插件侧已有同样的守卫（scripts/integration-config-generator.mjs §G7：
+    // isDeepStrictEqual(PURPOSES.map(p=>p.key), MODEL_USES)）。生成器这边也钉死一份：
+    // 联测不可用时（CI 没有 sibling 仓库）也能挡住"本地手滑改键/换序"。
+    const EXPECTED_PURPOSE_KEYS = [
+        'chat', 'summarization', 'judge',
+        'image-understanding', 'text-embedding', 'tts', 'image-generation',
+    ];
+    check('PURPOSES 键顺序 = 固定 7 键预期（含顺序）',
+        JSON.stringify(PURPOSES.map(p => p.key)) === JSON.stringify(EXPECTED_PURPOSE_KEYS),
+        JSON.stringify(PURPOSES.map(p => p.key)));
+    check('没有新增 decision / compression 之类用途（插件对未知用途整份拒绝）',
+        PURPOSES.length === 7 && !PURPOSES.some(p => ['decision', 'compression'].includes(p.key)),
+        JSON.stringify(PURPOSES.map(p => p.key)));
+    const judge = PURPOSES.find(p => p.key === 'judge');
+    check('judge 标签 =「评分 / 决策（判定）」', judge.label === '评分 / 决策（判定）', judge.label);
+    check('judge hint 是评分/决策表述', /评分/.test(judge.hint) && /决策/.test(judge.hint), judge.hint);
+    check('每个用途都有 label/hint', PURPOSES.every(p => !!p.label && !!p.hint));
+}
+
+console.log('\n=== 判定模型选型提示 PURPOSE_MODEL_HINTS（§12.2：结构化、只提示不预选） ===');
+{
+    const hint = PURPOSE_MODEL_HINTS.judge;
+    check('存在 judge 提示', !!hint);
+    check('提示的键都是合法用途（不新增 purpose）',
+        Object.keys(PURPOSE_MODEL_HINTS).every(k => PURPOSES.some(p => p.key === k)),
+        JSON.stringify(Object.keys(PURPOSE_MODEL_HINTS)));
+    check('没有 decision 提示键', !('decision' in PURPOSE_MODEL_HINTS));
+    check('带 title / summary / disclaimer', !!hint.title && !!hint.summary && !!hint.disclaimer);
+    check('priceTierLabels 覆盖 low/mid/high',
+        ['low', 'mid', 'high'].every(k => !!hint.priceTierLabels[k]));
+    check('capabilityLabels 覆盖 yes/no/verify',
+        ['yes', 'no', 'verify'].every(k => !!hint.capabilityLabels[k]));
+
+    const vendors = Array.isArray(hint.vendors) ? hint.vendors : [];
+    check('vendor 决策候选非空', vendors.length > 0, String(vendors.length));
+    const badShape = [];
+    const badTier = [];
+    const badCap = [];
+    const badNames = [];
+    const knownVendors = new Set(KNOWN_VENDORS.map(v => v.value));
+    const badVendors = [];
+    for (const v of vendors) {
+        if (typeof v.vendor !== 'string' || typeof v.label !== 'string' || !Array.isArray(v.candidates)
+            || v.candidates.length === 0 || !v.candidates.every(c => typeof c === 'string' && c.trim())) {
+            badShape.push(v.vendor);
+        }
+        if (!['low', 'mid', 'high'].includes(v.priceTier)) badTier.push(`${v.vendor}=${v.priceTier}`);
+        if (!['yes', 'no', 'verify'].includes(v.structuredOutput)) badCap.push(`${v.vendor}.structuredOutput=${v.structuredOutput}`);
+        if (!['yes', 'no', 'verify'].includes(v.thinking)) badCap.push(`${v.vendor}.thinking=${v.thinking}`);
+        if (!knownVendors.has(v.vendor)) badVendors.push(v.vendor);
+        if (typeof v.note !== 'string' || !v.note.trim()) badNames.push(v.vendor);
+    }
+    check('每条都有 vendor / label / candidates[]', badShape.length === 0, badShape.join(', '));
+    check('价格档取值合法（low/mid/high）', badTier.length === 0, badTier.join(', '));
+    check('structuredOutput / thinking 取值合法（yes/no/verify）', badCap.length === 0, badCap.join(', '));
+    check('vendor 都来自 KNOWN_VENDORS（拼错只影响提示，仍要拦住）', badVendors.length === 0, badVendors.join(', '));
+    check('每条都有 note', badNames.length === 0, badNames.join(', '));
+    // 只提示不预选：这份数据不在 v5.js 的构建路径里（构建输出与它无关）。
+    const provs = [goodProvider({ models: [{ id: 'm1', name: 'deepseek-flash', kind: 'text' }] })];
+    check('提示数据不进入生成配置', !serialize(build(provs, { judge: 'm1' })).includes('PURPOSE_MODEL_HINTS'));
+}
+
+console.log('\n=== 可选判定请求体预设（§12.3）：关闭时逐字节不变 ===');
+{
+    // **改动前**（git 9262b4e）实测的 build 输出，逐字节抄下来当基线。
+    // 只要关闭预设的路径有任何漂移（键序/默认 body/多出字段），这里立刻失败。
+    const BASELINE = '{"version":5,"providers":[{"api":"openai-completions","baseURL":"https://api.deepseek.com/v1","apiKey":"sk-a","models":[{"id":"flash","name":"deepseek-flash","kind":"vision"},{"id":"pro","name":"deepseek-pro","kind":"text"}]}],"purposes":{"chat":["flash"],"summarization":["flash"],"judge":["pro"],"image-understanding":["flash"]},"groups":[{"purposes":["chat","summarization","judge"],"body":{"temperature":1,"top_p":1,"max_tokens":8192,"stop":null,"stream":false}},{"purposes":["image-understanding"],"body":{"temperature":1,"max_tokens":2048,"stop":null,"stream":false}}]}';
+    const provs = [{
+        id: 'c1', templateId: 'deepseek', mode: 'vendor', provider: '', api: 'openai-completions',
+        baseURL: 'https://api.deepseek.com/v1', apiKey: 'sk-a',
+        models: [
+            { id: 'flash', name: 'deepseek-flash', kind: 'vision' },
+            { id: 'pro', name: 'deepseek-pro', kind: 'text' },
+        ],
+        enabled: true, displayName: '', timeout: 0, request: {},
+    }];
+    const purposes = { chat: ['flash'], summarization: ['flash'], judge: ['pro'], 'image-understanding': ['flash'] };
+
+    check('不传 options → 输出逐字节等于改动前基线', serialize(build(provs, purposes)) === BASELINE,
+        serialize(build(provs, purposes)));
+    check('显式 judgePreset:false → 同样逐字节等于基线',
+        serialize(build(provs, purposes, undefined, undefined, { judgePreset: false })) === BASELINE);
+    const off = build(provs, purposes);
+    check('关闭时没有独立 judge 组', !off.groups.some(g => g.purposes.length === 1 && g.purposes[0] === 'judge'));
+    check('关闭时不出现 response_format', !serialize(off).includes('response_format'));
+
+    // ---- 开启 ----
+    const on = build(provs, purposes, undefined, undefined, { judgePreset: true });
+    const chatGroup = on.groups.find(g => g.purposes.includes('chat'));
+    check('开启后 chat 组不再包含 judge',
+        JSON.stringify(chatGroup.purposes) === JSON.stringify(['chat', 'summarization']),
+        JSON.stringify(chatGroup.purposes));
+    const judgeGroup = on.groups.find(g => g.purposes.length === 1 && g.purposes[0] === 'judge');
+    check('开启后 judge 独立成组', !!judgeGroup, JSON.stringify(on.groups));
+    check('judge body = JUDGE_PRESET_BODY（temperature 0 / max_tokens 300 / json_object）',
+        !!judgeGroup && JSON.stringify(judgeGroup.body) === JSON.stringify({
+            temperature: 0, max_tokens: 300, response_format: { type: 'json_object' },
+        }), JSON.stringify(judgeGroup && judgeGroup.body));
+    check('预设 body 与导出常量一致',
+        !!judgeGroup && JSON.stringify(judgeGroup.body) === JSON.stringify(JUDGE_PRESET_BODY));
+    check('开启后完整配置通过生成器校验（插件同口径）', validateConfig(on).length === 0,
+        JSON.stringify(validateConfig(on)));
+    check('judge 仍只出现在一个组里', on.groups.filter(g => g.purposes.includes('judge')).length === 1,
+        JSON.stringify(on.groups.map(g => g.purposes)));
+
+    // 预设只是给 judge 组一个 body，不改绑定本身
+    check('开启不改变 purposes 绑定', JSON.stringify(on.purposes) === JSON.stringify(build(provs, purposes).purposes));
+
+    // 只绑 judge：不应产生 chat 组
+    const only = build(provs, { judge: 'pro' }, undefined, undefined, { judgePreset: true });
+    check('只绑 judge 时只产 judge 组',
+        only.groups.length === 1 && JSON.stringify(only.groups[0].purposes) === JSON.stringify(['judge']),
+        JSON.stringify(only.groups.map(g => g.purposes)));
+
+    // judge 未绑定 → 开关不生效（不写无用 body，输出与关闭一致）
+    check('judge 未绑定时开关不改变输出',
+        serialize(build(provs, { chat: 'flash' }, undefined, undefined, { judgePreset: true }))
+        === serialize(build(provs, { chat: 'flash' })));
+
+    // 高级覆盖：useBodies.judge 可替换预设 body（不按 vendor 猜字段，用户自己填）
+    const custom = build(provs, purposes, { judge: { temperature: 0, max_tokens: 123 } }, undefined, { judgePreset: true });
+    const customJudge = custom.groups.find(g => g.purposes.length === 1 && g.purposes[0] === 'judge');
+    check('useBodies.judge 可覆盖预设 body',
+        !!customJudge && JSON.stringify(customJudge.body) === '{"temperature":0,"max_tokens":123}',
+        JSON.stringify(customJudge && customJudge.body));
+    check('覆盖后仍合法', validateConfig(custom).length === 0, JSON.stringify(validateConfig(custom)));
+}
+
+console.log('\n=== 判定预设：导入→导出往返不漂移 + groups 顺序守卫（§12.3/§12.4） ===');
+{
+    const provs = [{
+        id: 'c1', templateId: 'deepseek', mode: 'vendor', provider: '', api: 'openai-completions',
+        baseURL: 'https://api.deepseek.com/v1', apiKey: 'sk-a',
+        models: [
+            { id: 'flash', name: 'deepseek-flash', kind: 'vision' },
+            { id: 'pro', name: 'deepseek-pro', kind: 'text' },
+        ],
+        enabled: true, displayName: '', timeout: 0, request: {},
+    }];
+    const purposes = { chat: ['flash'], summarization: ['flash'], judge: ['pro'], 'image-understanding': ['flash'] };
+    const on = build(provs, purposes, undefined, undefined, { judgePreset: true });
+
+    const rt = parseImport(serialize(on));
+    check('导入成功', rt.ok, JSON.stringify(rt.issues));
+    check('导入识别 judgePreset', rt.state.judgePreset === true);
+    check('judge body 还原进 useBodies.judge',
+        JSON.stringify(rt.state.useBodies.judge) === JSON.stringify(JUDGE_PRESET_BODY),
+        JSON.stringify(rt.state.useBodies.judge));
+    check('judge 预设组没被误当非标准分组', rt.state.extraGroups.length === 0,
+        JSON.stringify(rt.state.extraGroups));
+    const again = build(rt.state.providers, rt.state.purposes, rt.state.useBodies, rt.state.extraGroups,
+        { judgePreset: rt.state.judgePreset });
+    check('开启预设往返逐字节一致', serialize(again) === serialize(on),
+        `\n    前=${serialize(on)}\n    后=${serialize(again)}`);
+    const rt2 = parseImport(serialize(again));
+    const again2 = build(rt2.state.providers, rt2.state.purposes, rt2.state.useBodies, rt2.state.extraGroups,
+        { judgePreset: rt2.state.judgePreset });
+    check('二次往返仍一致', serialize(again2) === serialize(on));
+
+    // ---- 默认（关闭）路径的分组顺序守卫 ----
+    const off = build(provs, purposes);
+    check('默认 groups[0].purposes 顺序固定（chat,summarization,judge）',
+        JSON.stringify(off.groups[0].purposes) === JSON.stringify(['chat', 'summarization', 'judge']),
+        JSON.stringify(off.groups[0].purposes));
+    check('默认 groups 整体顺序固定（对话系 → 识图 → 嵌入）',
+        JSON.stringify(off.groups.map(g => g.purposes)) === JSON.stringify([
+            ['chat', 'summarization', 'judge'], ['image-understanding'],
+        ]), JSON.stringify(off.groups.map(g => g.purposes)));
+    const rtOff = parseImport(serialize(off));
+    const offAgain = build(rtOff.state.providers, rtOff.state.purposes, rtOff.state.useBodies,
+        rtOff.state.extraGroups, { judgePreset: rtOff.state.judgePreset });
+    check('默认路径导入往返逐字节一致', serialize(offAgain) === serialize(off),
+        `\n    前=${serialize(off)}\n    后=${serialize(offAgain)}`);
+    check('默认路径往返后 groups 顺序不变',
+        JSON.stringify(offAgain.groups.map(g => g.purposes)) === JSON.stringify(off.groups.map(g => g.purposes)));
+
+    // ---- 旧/手写配置：有 ['judge'] 组但 judge 未绑定 → 不误识别，按非标准分组原样保留 ----
+    const legacy = JSON.stringify({
+        version: 5,
+        providers: [{
+            api: 'openai-completions', baseURL: 'https://api.deepseek.com/v1', apiKey: 'k',
+            models: [{ id: 'm1', name: 'deepseek-chat', kind: 'text' }],
+        }],
+        purposes: { chat: 'm1' },
+        groups: [{ purposes: ['judge'], body: { temperature: 0 } }],
+    });
+    const lr = parseImport(legacy);
+    check('judge 未绑定时不启用预设', lr.ok && lr.state.judgePreset === false, JSON.stringify(lr.state && lr.state.judgePreset));
+    check('该组按非标准分组原样保留', lr.state.extraGroups.length === 1, JSON.stringify(lr.state.extraGroups));
+    const lout = build(lr.state.providers, lr.state.purposes, lr.state.useBodies, lr.state.extraGroups,
+        { judgePreset: lr.state.judgePreset });
+    check('导出仍包含该 judge 组（不吞配置）',
+        lout.groups.some(g => JSON.stringify(g.purposes) === JSON.stringify(['judge'])),
+        JSON.stringify(lout.groups));
 }
 
 console.log(`\n===== ${pass} 通过 / ${fail} 失败 =====`);

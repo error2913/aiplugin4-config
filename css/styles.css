@@ -205,6 +205,12 @@ body {
 /* ---------- 用途绑定（卡片列表 + 取用顺序角标） ---------- */
 .purpose-list { display: flex; flex-direction: column; gap: 14px; }
 .purpose-intro { margin-bottom: 2px; }
+/* 判定请求体预设开关（§12.3）：独立一行，与用途卡片块区分开 */
+.purpose-preset {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 8px 10px; border: 1px dashed var(--border); border-radius: var(--radius-sm);
+}
+.purpose-hint { margin-top: -2px; }
 .purpose-block { display: flex; flex-direction: column; gap: 7px; }
 .purpose-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .purpose-label { font-size: var(--fs-sm); color: var(--text-dim); font-weight: 550; flex: 0 0 auto; }

@@ -59,7 +59,8 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 - **自动拉取模型列表**：浏览器直连 `GET /models`，结果做成可点击卡片多选
 - **自动预填模型类型**（`kind`）：识别嵌入/生图/语音模型，让配置显式化
 - **连接卡片**：每张卡 = 一个连接，可编辑/删除；顺序即插件里的连接顺序
-- **用途绑定**：7 个用途各一组模型卡片，点击绑定，**角标 = 取用顺序**（可绑多个，插件按顺序取用并在失败时往后回退）
+- **用途绑定**：7 个用途各一组模型卡片，点击绑定，**角标 = 取用顺序**（可绑多个，插件按顺序取用并在失败时往后回退）；每张用途卡都显示用途说明，其中「评分 / 决策（判定）」（judge）额外给出**选型提示**（推荐模型 / 价格档 / 结构化输出 / 思考支持，**只提示不预选**，不会自动改绑定）
+- **可选判定请求体预设（默认关闭）**：打开后若判定用途绑定了模型，生成配置的 `groups[]` 会为 judge 追加一个独立用途组（`temperature: 0`、`max_tokens: 300`、`response_format: {"type":"json_object"}`），与对话系 body 互不影响；关闭时输出与旧版逐字节一致。生成器**不按 vendor 猜「关思考」字段**（插件请求体机制没有 vendor→思考开关预设），需要时在「用途组请求体（高级）」里自填
 - **实时预览**：右侧常驻显示生成的 JSON，编辑过程中即时更新
 - **校验 + 路径报错**：`$.providers[1].models[0].kind` 形式指出问题，有问题时禁止复制
 - **遮蔽 API Key**：导出时换成 `sk-xxxx`，方便截图分享
@@ -90,7 +91,7 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 | --- | --- | --- | --- |
 | 角色设定 | 角色设定 →「角色设定」 | `{version:1, roles:[{name,prompt}]}` | 重载 JS；`.ai role` 切换 |
 | 技能 | 技能 →「技能列表」 | `{version:1, skills:[{name,description,platform,content}]}` | `.ai skill refresh` |
-| MCP | MCP →「MCP服务器」 | **标准 MCP JSON**：`{"mcpServers":{"<服务器名>":{"type":"http","url":"…","headers":{…}}}}`；另支持扩展字段 `platform` | `.ai mcp refresh`（先开「是否启用MCP」） |
+| MCP | MCP →「MCP服务器」 | **标准 MCP JSON**：`{"mcpServers":{"<服务器名>":{"type":"http","url":"…","headers":{…}}}}`；另支持扩展字段 `platform` 与 `capability` | `.ai mcp refresh`（先开「是否启用MCP」） |
 | 知识库 | 知识库 →「知识库配置」 | `{version:1, libraries:[{name,description,platform,content}]}` | `.ai kb refresh` |
 | 事件触发 | 触发 →「事件触发规则」 | `{version:1, rules:[{on,scope,match,prompt}]}`（一条规则一个扁平事件名） | 重载 JS |
 
@@ -103,11 +104,12 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
   - 技能：标准 `SKILL.md`（`---` frontmatter + 正文，这是其他 agent 通用的技能文件格式），一个文件一个技能；
   - 知识库：`.md` / `.txt`，库名取第一个 `# 标题`，没有标题时用文件名；描述取正文首段；
   - 角色：`.md` / `.txt`，文件名作为角色名，整份文本作为设定；
-  - MCP：`.json`，**要求标准 `mcpServers` 结构**（与 Claude Desktop / Cursor 的 `.mcp.json` 一致）；stdio（`command`）与 SSE 会明确警告并跳过；
+  - MCP：`.json`，**要求标准 `mcpServers` 结构**（与 Claude Desktop / Cursor 的 `.mcp.json` 一致）；支持 aiplugin4 扩展字段 `platform` / `capability`（旧字段 `imageRefs` 兼容）；stdio（`command`）与 SSE 会明确警告并跳过；
   - 事件触发：`.json`，与「触发 → 事件触发规则」同格式（规范对象或裸数组都行）。
 - 也支持把已有 JSON 粘进「导入…」继续改；导入会**替换**当前页签内容，校验不通过时不动任何东西。
-- 「恢复默认」：角色 / 技能 / 知识库与插件出厂默认一致；**MCP 插件的出厂默认为空**，生成器保留四台示例（`mcp-files-exec` / `md-html-render` / `mcp-browser` / `image-host`）供按需复制；**事件触发出厂默认为空**，默认输出 `{"version":1,"rules":[]}`。默认数据由 `tools/sync-default-data.mjs` 从插件源码生成，插件改默认值时重跑。
-- MCP 输出是**标准 MCP JSON**：顶层 `mcpServers` 对象，键 = 服务器名，字段用 `type` / `url` / `headers`；`token` 只是输入简写，导出时合并成 `Authorization: Bearer …`，不会输出非标准字段；`platform` 是 aiplugin4 的扩展字段（标准客户端会忽略未知字段）。启用开关关闭的服务器直接不出现。
+- 「恢复默认」：角色 / 技能 / 知识库与插件出厂默认一致；**MCP 插件的出厂默认为空**，生成器保留四台示例（`mcp-files-exec` / `md-html-render` / `mcp-browser` / `image-host`，其中 `image-host` 用 `capability: "image-host"`）供按需复制；**事件触发出厂默认为空**，默认输出 `{"version":1,"rules":[]}`。默认数据由 `tools/sync-default-data.mjs` 从插件源码生成，插件改默认值时重跑。
+- MCP 输出是**标准 MCP JSON**：顶层 `mcpServers` 对象，键 = 服务器名，字段用 `type` / `url` / `headers`；`token` 只是输入简写，导出时合并成 `Authorization: Bearer …`，不会输出非标准字段；`platform` 与 `capability` 是 aiplugin4 的扩展字段（标准客户端会忽略未知字段）。启用开关关闭的服务器直接不出现。
+- MCP **能力声明 `capability`**（下拉：不填 / `image-host`）：`image-host` 表示该服务器提供图床画廊能力（`image_search` / `image_keep` / `image_unkeep` / `image_tag`），插件据此注册图床适配器。未知值按**警告后忽略**处理（与插件解析同口径），不会让整份导入失败。旧字段 `imageRefs: true` 仍可导入/导出（兼容一版）：它表示"该服务器的工具结果包含图片引用"，语义与 `capability` 不同，**不会**被自动映射。
 - 只支持 Streamable HTTP 的 MCP。
 - 生成器的「启用」是**条目级**开关，只影响该条目是否出现在生成的 JSON 里；「是否启用MCP / 启用知识库记忆 / 会话回收」这类**全局开关**仍由插件配置页单独设置，不写进 JSON。
 - 插件侧这些页签对应**新的 JSON 键名**，旧的多框配置项不再读取、也不会自动迁移；升级后按生成器重新生成一份粘贴即可。
@@ -129,6 +131,10 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 - `group_request` / `friend_request` 也会正常触发响应：`group_request`（加群申请）是主场景；`friend_request` 可能因双方已是好友而无法投递回复。
 - **旧格式导入迁移**：含 `name` / `toolChoice` / `on` 数组 / `notify.*` 复合名的旧 JSON 或旧本地草稿会自动迁移（丢无效字段、数组取第一个并 warning、复合名映射扁平名、match 对象糖展开）。
 - 「启用」开关关闭的规则只留在草稿里，不写进 JSON；导入时未知键只产生 warning，不会导致整份配置被拒。
+- **范围说明**：本页签只生成插件「触发」页的 **11 个键之一**——`事件触发规则`（JSON v1）。其余 10 个键
+  （`触发需要满足的条件` / `触发次数上限` / `触发次数补充间隔` / `触发活跃时间` / `默认计数器` / `默认计时器` /
+  `评分触发参数`（TOML v2）/ `默认概率` / `触发正则表达式` / `默认定时器`（TOML 多 `[[timer]]`））
+  不在生成器范围，仍需在插件配置页设置；规则工具 / 命令 schema（`set_trigger_rule` 等）同样不由生成器生成。
 - 点「复制全部」→ 粘到海豹 → JS插件 → 插件设置 → aiplugin4 →「触发」→「事件触发规则」；重载 JS 生效。
 ### 关于 API Key
 
@@ -177,7 +183,9 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 
 > **用途数量变更：`compression`（压缩）已彻底移除。**
 > 插件侧删掉了这个用途（`ChatModelUse` / schema / 出厂配置都没有了），生成器同步为
-> **7 个用途**，对话系用途组为 `chat` / `summarization` / `judge` 三项。
+> **7 个用途**；judge 统一显示为「评分 / 决策（判定）」，对话系用途组为
+> `chat` / `summarization` / `judge` 三项。judge 还可以单独开「判定请求体预设」
+> （默认关闭；开启后 judge 从对话系组拆出，成为独立用途组）。
 > 旧配置/旧本地草稿里含 `compression` 时**不会导入失败**：导入会自动剔除该用途绑定与
 > 相关分组（过滤后为空的组删除），并给出「旧配置中的「压缩」用途已移除，已自动忽略」的警告。
 
@@ -207,8 +215,8 @@ js/domains/mcp.js     MCP：标准 mcpServers JSON 的校验 / 构建 / 导入 /
 js/domains/kb.js     知识库：校验 / 构建 / 导入 / Markdown 解析
 js/domains/event-trigger.js  事件触发：校验 / 构建 / 导入 / 文件解析
 js/domains/default-data.js  出厂默认（由 tools/sync-default-data.mjs 生成）
-tests/run.mjs         模型 / 联网逻辑测试（258 项）
-tests/domains-run.mjs 五个内容分区逻辑测试（155 项）
+tests/run.mjs         模型 / 联网逻辑测试（304 项）
+tests/domains-run.mjs 五个内容分区逻辑测试（231 项）
 tests/web-check.mjs  联网分区逻辑自检（28 项）
 tests/dom-test.html   模型 / 联网浏览器交互测试（207 项）
 tests/domain-e2e-check.html 五个内容分区浏览器交互测试（52 项）

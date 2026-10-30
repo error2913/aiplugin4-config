@@ -228,6 +228,30 @@ export const DEFAULT_USE_BODIES = {
     'text-embedding': { encoding_format: 'float', dimensions: 1024 },
 };
 
+/**
+ * 可选的「决策 / 评分请求体预设」（方案 §12.3）：**默认不启用**，开启时独立成组。
+ *
+ * 为什么独立成组而不是塞进 chat 组：插件按 groups[].purposes 给用途套 body，
+ * 同一组里的用途共享一个 body —— judge 要 temperature 0 / 小 max_tokens /
+ * json_object，和 chat 的 temperature 1 / 8192 直接冲突。
+ *
+ * 关于「按 vendor 关思考」：生成器**没有** vendor→思考开关的预设表（插件请求体机制里
+ * 也没有现成的按 vendor 关思考映射），所以这里**不猜**厂商字段（DeepSeek 的
+ * `thinking:{"type":"disabled"}`、Qwen 的 `enable_thinking` 等各家不同）。
+ * 需要关思考时，用「用途组请求体（高级）」覆盖 judge 组 body 自行填（插件 v5 校验
+ * 只要求 thinking 是结构化对象，不接受字符串）。
+ */
+export const JUDGE_PRESET_BODY = {
+    temperature: 0,
+    max_tokens: 300,
+    response_format: { type: 'json_object' },
+};
+
+/** JUDGE_PRESET_BODY 的深拷贝（避免调用方改到共享常量） */
+function cloneJudgePresetBody() {
+    return JSON.parse(JSON.stringify(JUDGE_PRESET_BODY));
+}
+
 /** 用途组的分组方式：哪些用途共用一个 body（chat 系三个共享） */
 const GROUP_MEMBERS = {
     chat: ['chat', 'summarization', 'judge'],
@@ -238,11 +262,18 @@ const GROUP_MEMBERS = {
 /**
  * 生成用途组。
  * @param {object} purposes 用途绑定
- * @param {object} [useBodies] 用途组 body 覆盖（键同 DEFAULT_USE_BODIES）；未给的用默认
+ * @param {object} [useBodies] 用途组 body 覆盖（键同 DEFAULT_USE_BODIES / 'judge'）；未给的用默认
  * @param {object[]} [extraGroups] 导入时保留下来的非标准分组（原样附在最后）
+ * @param {{judgePreset?: boolean}} [options] 可选开关（默认全关，输出与旧版逐字节一致）
+ *
+ * judgePreset（方案 §12.3）：开启且**判定用途有绑定**时，把 judge 从对话系组里拆出来，
+ * 独立成 `{purposes:['judge'], body:JUDGE_PRESET_BODY}`。判定没绑定时开关不生效 ——
+ * 不产生"给不存在的用途写 body"的无用配置，也保证关闭时输出逐字节不变。
  */
-function defaultGroups(purposes, useBodies, extraGroups) {
+function defaultGroups(purposes, useBodies, extraGroups, options) {
     const used = new Set(Object.keys(purposes || {}).filter(k => normalizePurposeList(purposes[k]).length > 0));
+    // 判定预设只在真的绑定了 judge 时生效（避免产出空 body 的 judge 组）
+    const judgePresetOn = !!(options && options.judgePreset === true) && used.has('judge');
     // 被非标准分组覆盖的用途：不再由标准分组给 body，避免"同一个用途两个组"互相盖
     const covered = new Set();
     for (const g of extraGroups || []) {
@@ -250,8 +281,12 @@ function defaultGroups(purposes, useBodies, extraGroups) {
     }
     const out = [];
     for (const [key, members] of Object.entries(GROUP_MEMBERS)) {
+        // judge 预设开启时，对话系组只保留 chat/summarization（judge 独立成组）
+        const effective = judgePresetOn && key === 'chat'
+            ? members.filter(u => u !== 'judge')
+            : members;
         // 该族一个用途都没绑定 → 不产组（避免塞无用配置）
-        if (!members.some(u => used.has(u))) continue;
+        if (!effective.some(u => used.has(u))) continue;
         // 该族**只要有一个**用途被非标准分组覆盖，就整族交给那些分组。
         // 不能只剔除被覆盖的那个：那会造出一个**新的非标准分组**
         // （如 [summarization,judge]），于是反复导入导出时分组不断增殖。
@@ -260,7 +295,15 @@ function defaultGroups(purposes, useBodies, extraGroups) {
         const body = override && typeof override === 'object' && !Array.isArray(override)
             ? override
             : DEFAULT_USE_BODIES[key];
-        out.push({ purposes: [...members], body });
+        out.push({ purposes: [...effective], body });
+    }
+    // judge 预设组：固定放在标准分组之后、导入保留分组之前（顺序稳定 → 往返不漂移）
+    if (judgePresetOn) {
+        const override = useBodies && useBodies.judge;
+        const body = override && typeof override === 'object' && !Array.isArray(override)
+            ? override
+            : cloneJudgePresetBody();
+        out.push({ purposes: ['judge'], body });
     }
     // 导入保留的分组按原顺序附后（顺序影响插件的合并优先级）
     for (const g of extraGroups || []) out.push(g);
@@ -272,10 +315,11 @@ function defaultGroups(purposes, useBodies, extraGroups) {
  * 只输出有意义的字段（省略空值），保持配置紧凑。
  * @param {object[]} providers
  * @param {object} purposes
- * @param {object} [useBodies] 用途组 body 覆盖（见 DEFAULT_USE_BODIES）
+ * @param {object} [useBodies] 用途组 body 覆盖（见 DEFAULT_USE_BODIES / 'judge'）
  * @param {object[]} [extraGroups] 导入保留的非标准用途组
+ * @param {{judgePreset?: boolean}} [options] 可选开关（默认全关 = 输出与旧版逐字节一致）
  */
-export function build(providers, purposes, useBodies, extraGroups) {
+export function build(providers, purposes, useBodies, extraGroups, options) {
     const out = { version: 5 };
     // 停用的连接直接从生成配置里移除（不写 enabled 字段），绑定到它模型的用途也一并过滤
     const active = (providers || []).filter(p => p.enabled !== false);
@@ -311,7 +355,7 @@ export function build(providers, purposes, useBodies, extraGroups) {
     }
     if (Object.keys(usedPurposes).length) out.purposes = usedPurposes;
 
-    const groups = defaultGroups(usedPurposes, useBodies, extraGroups);
+    const groups = defaultGroups(usedPurposes, useBodies, extraGroups, options);
     if (groups.length) out.groups = groups;
 
     return out;
@@ -398,6 +442,9 @@ function samePurposeSet(a, b) {
  *   - `providers[]` → 连接数组（`uid`/`templateId`/`mode` 由 app.js 补，属 UI 概念）
  *   - `purposes` → 用途绑定
  *   - `groups[]` → 命中已知分组的 body 进 `useBodies`；**其余原样留在 `extraGroups`**
+ *   - 判定请求体预设（可选）：`purposes` 恰为 `['judge']` 的组 → `judgePreset=true` +
+ *     `useBodies.judge`；开启预设时对话系组是 `['chat','summarization']`，其 body 还原到
+ *     `useBodies.chat`。两条都识别才能保证「开启预设导出→导入→再导出」逐字节不漂移
  *   - `models[].request` / `bodyMode` / `contextWindow` / `maxTokens` 全部保留
  *
  * 旧配置兼容：已移除的用途（见 `REMOVED_PURPOSES`，目前是 compression）会在
@@ -498,9 +545,24 @@ export function parseImport(text) {
         if (list.length) purposes[k] = list;
     }
 
+    // 判定请求体预设（§12.3，可选、默认不启用）：识别 purposes 恰为 ['judge'] 的独立组。
+    // 仅当判定用途真的绑定了模型时才认（否则按普通非标准组原样保留，不吞用户配置）。
+    const judgePreset = !!purposes.judge
+        && (cfg.groups || []).some(g => samePurposeSet(g.purposes, ['judge']));
+
     const useBodies = {};
     const extraGroups = [];
     for (const g of cfg.groups || []) {
+        // judge 预设组：独立识别（不落 extraGroups，否则「导入→导出」会漂移）
+        if (judgePreset && samePurposeSet(g.purposes, ['judge'])) {
+            if (g.body && Object.keys(g.body).length) useBodies.judge = g.body;
+            continue;
+        }
+        // 预设开启时对话系组是 ['chat','summarization']（judge 已拆出）：识别它的 body
+        if (judgePreset && samePurposeSet(g.purposes, ['chat', 'summarization'])) {
+            if (g.body && Object.keys(g.body).length) useBodies.chat = g.body;
+            continue;
+        }
         const hit = Object.entries(GROUP_MEMBERS).find(([, members]) => samePurposeSet(members, g.purposes));
         if (hit && g.body && Object.keys(g.body).length) {
             useBodies[hit[0]] = g.body;
@@ -534,5 +596,5 @@ export function parseImport(text) {
         }
     }
 
-    return { ok: true, state: { providers, purposes, useBodies, extraGroups }, issues: [], warnings };
+    return { ok: true, state: { providers, purposes, useBodies, extraGroups, judgePreset }, issues: [], warnings };
 }

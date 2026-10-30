@@ -41,6 +41,8 @@ console.log('=== 默认值：角色 / 技能 / 知识库与插件一致；MCP �
     eq('MCP 第四台名称', DEFAULT_MCP[3].name, 'image-host');
     eq('MCP image-host 地址', DEFAULT_MCP[3].url, 'http://127.0.0.1:46680/mcp');
     eq('MCP image-host 默认带 token 头', JSON.stringify(DEFAULT_MCP[3].headers), JSON.stringify({ Authorization: 'Bearer token' }));
+    eq('MCP image-host 默认用 capability（§9.4 新字段）', DEFAULT_MCP[3].capability, 'image-host');
+    check('MCP 默认示例不再写旧字段 imageRefs', !('imageRefs' in DEFAULT_MCP[3]), JSON.stringify(DEFAULT_MCP[3]));
     eq('知识库默认 3 个', DEFAULT_KB.length, 3);
     eq('ob11 知识库平台', JSON.stringify(DEFAULT_KB[2].platform), JSON.stringify(['QQ']));
     check('默认知识库内容包含 ob11', DEFAULT_KB[2].content.includes('call_ob11_api'));
@@ -447,6 +449,82 @@ console.log('\n=== 不解析 frontmatter 的分区（角色 / 知识库 / MCP）
     check('知识库 spec 不再暴露 fromLegacy', !('fromLegacy' in kbSpec));
     check('MCP spec 不再暴露 fromLegacy', !('fromLegacy' in mcpSpec));
     check('技能 spec 不再暴露 fromLegacy', !('fromLegacy' in skillsSpec));
+}
+
+console.log('\n=== MCP capability（§9.4 生成器侧：normalize/build/parse/validate/mask 全链路） ===');
+{
+    const baseItem = {
+        name: 'image-host', platform: [], enabled: true, type: 'http',
+        url: 'http://127.0.0.1:46680/mcp', token: '', headers: {},
+        capability: 'image-host',
+    };
+
+    // build：capability 写进标准 mcpServers 条目
+    const built = mcpSpec.build([baseItem]);
+    eq('capability 写进输出', built.mcpServers['image-host'].capability, 'image-host');
+
+    // 空值不输出（保持配置紧凑，也避免给插件塞无意义字段）
+    const plain = mcpSpec.build([{ ...baseItem, capability: '' }]);
+    check('不填 capability → 输出没有该字段', !('capability' in plain.mcpServers['image-host']),
+        JSON.stringify(plain.mcpServers['image-host']));
+
+    // parse → normalize → build 往返
+    const parsed = mcpSpec.parseImport(JSON.stringify(built));
+    check('含 capability 的输出可导入', parsed.ok, JSON.stringify(parsed.issues));
+    eq('导入后 capability 保留', parsed.items[0].capability, 'image-host');
+    check('导入无警告', parsed.warnings.length === 0, JSON.stringify(parsed.warnings));
+    eq('往返输出逐字节一致', JSON.stringify(mcpSpec.build(parsed.items)), JSON.stringify(built));
+
+    // 未知 capability：警告后忽略（与插件 parse.ts 同口径，不阻断整份导入）
+    const unknown = mcpSpec.parseImport(JSON.stringify({
+        mcpServers: { M: { url: 'http://127.0.0.1:1/mcp', capability: 'memory-host' } },
+    }));
+    check('未知 capability 仍可导入（不整份拒绝）', unknown.ok, JSON.stringify(unknown.issues));
+    check('未知 capability 给警告', (unknown.warnings || []).some(w => /capability/.test(w.msg)),
+        JSON.stringify(unknown.warnings));
+    check('未知 capability 不写进输出',
+        !('capability' in mcpSpec.build(unknown.items).mcpServers.M),
+        JSON.stringify(mcpSpec.build(unknown.items)));
+    const normUnknown = mcpSpec.normalizeItem({ name: 'M', url: 'http://x', capability: 'memory-host' });
+    check('normalizeItem 丢弃未知 capability', !('capability' in normUnknown), JSON.stringify(normUnknown));
+    const normKnown = mcpSpec.normalizeItem({ name: 'M', url: 'http://x', capability: 'image-host' });
+    eq('normalizeItem 保留合法 capability', normKnown.capability, 'image-host');
+
+    // validate：合法 capability 不产生问题
+    const v = mcpSpec.validate([baseItem]);
+    check('含 capability 的条目校验无问题',
+        v.problems.length === 0 && v.warnings.length === 0, JSON.stringify(v));
+    eq('newServer 默认 capability 为空', mcpSpec.newItem().capability, '');
+
+    // mask：遮蔽敏感头时不能把能力声明弄丢
+    const masked = maskMcp(mcpSpec.build([{ ...baseItem, headers: { Authorization: 'Bearer x' } }]));
+    eq('遮蔽后 capability 保留', masked.mcpServers['image-host'].capability, 'image-host');
+    eq('遮蔽仍生效', masked.mcpServers['image-host'].headers.Authorization, 'xxxx');
+
+    // ---- 旧 imageRefs:true 兼容一版：保留（不映射成 capability） ----
+    // 语义不同：imageRefs 管"工具结果里的 [img:<sha>] 规范化"，capability 管"图床适配器注册"。
+    // 映射会改变含义，所以选择**原样往返**。
+    const legacy = mcpSpec.parseImport(JSON.stringify({
+        mcpServers: { 'image-host': { url: 'http://127.0.0.1:1/mcp', imageRefs: true } },
+    }));
+    check('旧 imageRefs 仍可导入', legacy.ok, JSON.stringify(legacy.issues));
+    eq('旧 imageRefs 保留', legacy.items[0].imageRefs, true);
+    check('旧 imageRefs 不会被偷换成 capability', !('capability' in legacy.items[0]),
+        JSON.stringify(legacy.items[0]));
+    eq('旧 imageRefs 导出仍是 imageRefs',
+        JSON.stringify(mcpSpec.build(legacy.items).mcpServers['image-host'].imageRefs), 'true');
+
+    // 两者同时出现也各自保留（旧配置升级到新字段的过渡形态）
+    const both = mcpSpec.parseImport(JSON.stringify({
+        mcpServers: { 'image-host': { url: 'http://127.0.0.1:1/mcp', capability: 'image-host', imageRefs: true } },
+    }));
+    check('capability 与 imageRefs 可共存', both.ok);
+    eq('共存时 capability 保留', both.items[0].capability, 'image-host');
+    eq('共存时 imageRefs 保留', both.items[0].imageRefs, true);
+
+    // 默认数据（tools/sync-default-data.mjs 生成）必须能被插件解析
+    const defBuilt = mcpSpec.build(DEFAULT_MCP.map(x => mcpSpec.normalizeItem(x)));
+    eq('默认数据 image-host 输出 capability', defBuilt.mcpServers['image-host'].capability, 'image-host');
 }
 
 console.log('\n=== MCP 遮蔽 ===');

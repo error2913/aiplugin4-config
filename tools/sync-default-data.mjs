@@ -116,13 +116,17 @@ const DEFAULT_MCP_SOURCE = [
         headers: {},
     },
     {
+        // image-host 示例用**新的 capability 字段**（插件方案 §9.4）：它表示"该服务器提供图床
+        // 画廊能力"，插件据此注册 image-host 适配器（image_search / image_keep / image_unkeep / image_tag）。
+        // 旧字段 imageRefs:true 仍能导入/导出（兼容一版）—— 但它只管"工具结果里的图片引用
+        // 规范化"，语义不同，不能互相替代，所以这里不用它。
         name: 'image-host',
         platform: [],
         type: 'http',
         url: 'http://127.0.0.1:46680/mcp',
         token: '',
         headers: { Authorization: 'Bearer token' },
-        imageRefs: true,
+        capability: 'image-host',
     },
 ];
 

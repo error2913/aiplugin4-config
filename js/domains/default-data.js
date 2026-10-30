@@ -1,5 +1,5 @@
 // AUTO-GENERATED — 不要手改。
-// 由 tools/sync-default-data.mjs 从 aiplugin4 源码生成（aiplugin4 @ 091b2f4）。
+// 由 tools/sync-default-data.mjs 从 aiplugin4 源码生成（aiplugin4 @ bb0d140）。
 // 角色 / 技能 / 知识库与插件出厂默认一致；MCP 插件出厂默认为空，生成器保留示例供按需复制。插件改默认值时重跑该脚本。
 export const DEFAULT_ROLES = [
     {
@@ -55,7 +55,7 @@ export const DEFAULT_MCP = [
         "headers": {
             "Authorization": "Bearer token"
         },
-        "imageRefs": true
+        "capability": "image-host"
     }
 ];
 

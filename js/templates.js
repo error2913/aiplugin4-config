@@ -273,13 +273,62 @@ export function templateIdForBaseUrl(baseUrl, api) {
     return hit ? hit.id : 'custom';
 }
 
-/** 7 个用途（对应 v5 的 purposes） */
+/**
+ * 7 个用途（对应 v5 的 purposes）。
+ *
+ * 键**顺序就是 UI 展示顺序**，也必须与插件 `MODEL_USES` 完全一致（含顺序）——
+ * 插件的 v5 校验对未知用途是**整份拒绝**，且联测 §G7 用 isDeepStrictEqual 比对两侧数组。
+ * 不要在这里加 `decision` 之类的"别名用途"：那是新 purpose，会让老/新插件判定不一致。
+ *
+ * judge 统一叫「评分 / 决策（判定）」：插件侧它就是给消息打分、决定是否主动插话的那一路
+ * （#146），不是单纯"评判"。改文案时 hint 一并更新，UI 会把 hint 显示在用途块里。
+ */
 export const PURPOSES = [
     { key: 'chat', label: '对话', hint: '主对话' },
     { key: 'summarization', label: '总结', hint: '会话总结' },
-    { key: 'judge', label: '评判', hint: '评分/判定' },
+    { key: 'judge', label: '评分 / 决策（判定）', hint: '判定是否主动插话（评分/决策）' },
     { key: 'image-understanding', label: '图片识别', hint: '需 kind = vision' },
     { key: 'text-embedding', label: '向量记忆', hint: '需 kind = embed' },
     { key: 'tts', label: '语音合成', hint: '需 kind = tts' },
     { key: 'image-generation', label: '文生图', hint: '需 kind = gen' },
 ];
+
+/**
+ * 判定（judge）用途的**模型选型提示**（方案 §12.2 / #146 决策 9）。
+ *
+ * **只提示、不预选**：这张表不参与 build() / validate()，UI 也不会据此自动改 purposes 绑定
+ * —— 用户仍然自己点卡片。它只是把「判定该挑什么模型」的四项事实结构化，避免 UI 与文档
+ * 各写一份字符串然后漂移。
+ *
+ * 字段：
+ *   vendor           供应商标识（与 KNOWN_VENDORS.value 同一套；不对应任何绑定）
+ *   candidates       建议模型名（发布前请核对官方页；名字写错只影响提示，不影响配置）
+ *   priceTier        'low' | 'mid' | 'high' —— 按公开定价档位的粗略分档，不是实时价格
+ *   structuredOutput 'yes' | 'no' | 'verify' —— 是否支持 JSON 结构化输出（判定要稳定 JSON）
+ *   thinking         'yes' | 'no' | 'verify' —— 是否支持思考/推理模式（判定通常希望关掉以降延迟）
+ *   note             一句话说明
+ *
+ * 诚实约定：拿不准的一律写 'verify'（待核对官方页），**不猜**。
+ * 推荐清单来自方案 §12 的建议（国内低价档 + 严格 schema 备选），发布前必须复核。
+ */
+export const PURPOSE_MODEL_HINTS = {
+    judge: {
+        purpose: 'judge',
+        title: '评分 / 决策（判定）选型提示',
+        summary: '判定要给每条消息打分并决定是否主动插话：优先低延迟、低价、支持 JSON 结构化输出的模型；'
+            + '思考型模型更准但更慢更贵，通常建议关掉思考（用请求体覆盖 body.thinking / 厂商对应字段）。',
+        disclaimer: '只提示、不预选：不会自动修改用途绑定。模型名与价格发布前请核对官方页（方案 §12 建议清单）。',
+        priceTierLabels: { low: '低价档', mid: '中价档', high: '高价档' },
+        capabilityLabels: { yes: '支持', no: '不支持', verify: '待核对' },
+        vendors: [
+            { vendor: 'deepseek', label: 'DeepSeek', candidates: ['deepseek-flash'], priceTier: 'low', structuredOutput: 'yes', thinking: 'yes', note: '国内低价档首选之一，支持 JSON 输出。' },
+            { vendor: 'zhipu', label: '智谱 GLM', candidates: ['GLM-5.3-Flash'], priceTier: 'low', structuredOutput: 'yes', thinking: 'yes', note: 'Flash 档适合高频判定。' },
+            { vendor: 'alibaba', label: '阿里百炼', candidates: ['qwen3.8-flash'], priceTier: 'low', structuredOutput: 'yes', thinking: 'verify', note: 'Flash 档；思考模式可能默认开启，注意延迟。' },
+            { vendor: 'volcengine', label: '火山方舟', candidates: ['doubao-seed-2.1-lite'], priceTier: 'low', structuredOutput: 'verify', thinking: 'verify', note: 'lite 档价格优先，结构化输出以官方为准。' },
+            { vendor: 'moonshot', label: 'Moonshot 月之暗面', candidates: ['kimi-k3'], priceTier: 'mid', structuredOutput: 'yes', thinking: 'yes', note: '严格 schema 备选，输出 JSON 稳定。' },
+            { vendor: 'openai', label: 'OpenAI', candidates: ['gpt-6-luna'], priceTier: 'high', structuredOutput: 'yes', thinking: 'yes', note: '严格 schema 备选，成本较高。' },
+            { vendor: 'anthropic', label: 'Anthropic Claude', candidates: ['claude-haiku-5.5'], priceTier: 'high', structuredOutput: 'yes', thinking: 'verify', note: '严格 schema 备选，成本较高。' },
+            { vendor: 'google', label: 'Google Gemini', candidates: ['gemini-3.8-flash'], priceTier: 'mid', structuredOutput: 'yes', thinking: 'verify', note: '仅复核：发布前确认可用性与价格。' },
+        ],
+    },
+};
