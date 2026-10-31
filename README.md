@@ -59,8 +59,8 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 - **自动拉取模型列表**：浏览器直连 `GET /models`，结果做成可点击卡片多选
 - **自动预填模型类型**（`kind`）：识别嵌入/生图/语音模型，让配置显式化
 - **连接卡片**：每张卡 = 一个连接，可编辑/删除；顺序即插件里的连接顺序
-- **用途绑定**：7 个用途各一组模型卡片，点击绑定，**角标 = 取用顺序**（可绑多个，插件按顺序取用并在失败时往后回退）；每张用途卡都显示用途说明，其中「评分 / 决策（判定）」（judge）额外给出**选型提示**（推荐模型 / 价格档 / 结构化输出 / 思考支持，**只提示不预选**，不会自动改绑定）
-- **可选判定请求体预设（默认关闭）**：打开后若判定用途绑定了模型，生成配置的 `groups[]` 会为 judge 追加一个独立用途组（`temperature: 0`、`max_tokens: 300`、`response_format: {"type":"json_object"}`），与对话系 body 互不影响；关闭时输出与旧版逐字节一致。生成器**不按 vendor 猜「关思考」字段**（插件请求体机制没有 vendor→思考开关预设），需要时在「用途组请求体（高级）」里自填
+- **用途绑定**：7 个用途各一组模型卡片，点击绑定，**角标 = 取用顺序**（可绑多个，插件按顺序取用并在失败时往后回退）；每张用途卡都显示用途说明。judge 统一叫「**评分**」（给每条消息评分、决定是否主动插话），额外给出**选型提示**（推荐模型 / 价格档 / 结构化输出 / 思考支持，**只提示不预选**，不会自动改绑定）
+- **逐模型「用途请求体」（`models[].request.bodyByUse`）**：在连接编辑面板里为**每个模型**单独添加，默认 0 条 = 不写字段。每条 = 用途下拉 + 请求体 JSON + 删除按钮；用途按模型类型过滤（文本：对话 / 总结 / 评分；视觉另加图片识别；嵌入 / 生图 / 语音不显示入口），同一用途只能一条。它优先于内置预设，用来给「评分」这类用途单独设 `temperature: 0`、小 `max_tokens` 或 `thinking` 等厂商字段（生成器**不按 vendor 猜**关思考字段，需要时自己填）
 - **实时预览**：右侧常驻显示生成的 JSON，编辑过程中即时更新
 - **校验 + 路径报错**：`$.providers[1].models[0].kind` 形式指出问题，有问题时禁止复制
 - **遮蔽 API Key**：导出时换成 `sk-xxxx`，方便截图分享
@@ -181,13 +181,15 @@ node serve.mjs          # 默认 8099；也可 node serve.mjs 8080
 插件侧已同步改造（v5 单框 `模型配置` 取代 `api连接` + `模型规则`）。
 **要装到海豹，需要插件仓库的 `dist/aiplugin4.js` 构建产物 —— 而不仅是拉源码。**
 
-> **用途数量变更：`compression`（压缩）已彻底移除。**
-> 插件侧删掉了这个用途（`ChatModelUse` / schema / 出厂配置都没有了），生成器同步为
-> **7 个用途**；judge 统一显示为「评分 / 决策（判定）」，对话系用途组为
-> `chat` / `summarization` / `judge` 三项。judge 还可以单独开「判定请求体预设」
-> （默认关闭；开启后 judge 从对话系组拆出，成为独立用途组）。
-> 旧配置/旧本地草稿里含 `compression` 时**不会导入失败**：导入会自动剔除该用途绑定与
-> 相关分组（过滤后为空的组删除），并给出「旧配置中的「压缩」用途已移除，已自动忽略」的警告。
+> **用途数量不变：仍是 7 个。** `compression`（压缩）已彻底移除，judge 统一显示为
+> 「**评分**」（不再叫「评分 / 决策（判定）」，也没有 `decision` 这个用途键）。
+> 旧配置/旧本地草稿里含 `compression` 时**不会导入失败**：导入会自动剔除该用途绑定，
+> 并给出「旧配置中的「压缩」用途已移除，已自动忽略」的警告。
+>
+> **用途组请求体（`groups[]`）已停用。** 插件侧删掉了整套用途组机制，请求体覆盖改走
+> **逐模型**的 `models[].request.bodyByUse`（用途 → 请求体）：生成器不再输出 `groups`，
+> 导入旧配置时会把 `groups` **丢弃并明确警告**，而 `models[].request` 原样保留。
+> 旧版本地草稿里的 `useBodies` / `judgePreset` 也一并忽略（不再有「判定请求体预设」开关）。
 
 角色 / 技能 / MCP / 知识库 / 事件触发五个页签对应插件侧的**新 JSON 配置键**（`角色设定`、`技能列表`、`MCP服务器`、`知识库配置`、`事件触发规则`），
 格式版本为 `1`。旧的多框配置项不再读取、也不自动迁移；升级后请用这五个页签重新生成并粘贴。
@@ -215,17 +217,17 @@ js/domains/mcp.js     MCP：标准 mcpServers JSON 的校验 / 构建 / 导入 /
 js/domains/kb.js     知识库：校验 / 构建 / 导入 / Markdown 解析
 js/domains/event-trigger.js  事件触发：校验 / 构建 / 导入 / 文件解析
 js/domains/default-data.js  出厂默认（由 tools/sync-default-data.mjs 生成）
-tests/run.mjs         模型 / 联网逻辑测试（304 项）
+tests/run.mjs         模型 / 联网逻辑测试（301 项）
 tests/domains-run.mjs 五个内容分区逻辑测试（231 项）
 tests/web-check.mjs  联网分区逻辑自检（28 项）
-tests/dom-test.html   模型 / 联网浏览器交互测试（207 项）
+tests/dom-test.html   模型 / 联网浏览器交互测试（231 项）
 tests/domain-e2e-check.html 五个内容分区浏览器交互测试（52 项）
 tests/web-e2e-check.html 联网分区统一编辑/启用/导入交互测试（12 项）
 tests/close-check.html 面板关闭路径定点验证
-tests/purpose-check.html 用途绑定卡片 + 取用顺序角标检查（25 项）
+tests/purpose-check.html 用途绑定卡片 + 取用顺序角标 + 评分标签检查（26 项）
 tests/vision-e2e-check.html 视觉模型端到端检查（桩 /models → 卡片标注 → 配置 kind）
 tests/override-e2e-check.html 请求覆盖端到端检查（逐字输入不失焦 / 非法 JSON 不清空配置）
-tests/import-e2e-check.html 导入导出往返检查（一致性 / 幂等 / 编辑后不冲掉其它字段）
+tests/import-e2e-check.html 导入导出往返检查（bodyByUse 保留 / 旧 groups 丢弃+警告 / 幂等 / 编辑后不冲掉其它字段）
 tests/dashscope-image-e2e-check.html 百炼生图零配置检查（不填 URL / 不写结构）
 tests/style-check.html   排版与动效检查（计算样式：字号下限/控件归一化/箭头旋转/无 emoji）
 tests/cors-probe.html CORS 实测工具

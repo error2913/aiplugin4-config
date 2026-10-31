@@ -28,7 +28,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
                 models: [{ id: 'img', name: 'qwen-image-3.0-pro', kind: 'gen' }],
                 enabled: true, displayName: '', timeout: 0, request: {},
             }],
-            purposes: { 'image-generation': ['img'] }, useBodies: {}, extraGroups: [],
+            purposes: { 'image-generation': ['img'] },
         }));
 
         const f = document.createElement('iframe');

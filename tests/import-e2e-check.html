@@ -5,24 +5,31 @@
 <pre id="out">running…</pre>
 <iframe id="frame" src="/index.html" width="1500" height="950"></iframe>
 <script>
-// 测试必须从**干净状态**开始：生成器会把草稿存 localStorage，
-// 上一次运行（或手动操作过页面）的存档会让断言基于错误的前提。
+// 导入导出往返检查（v5 配置）。
+//
+// 这轮的重点变化：**用途组（groups）已停用** —— 请求体覆盖改走
+// models[].request.bodyByUse。所以这里验证：
+//   1. 旧配置里的 groups 被丢弃 + 明确警告，但 models[].request 原样保留
+//   2. 导出 → 再导入幂等（不漂移）
+//   3. 界面改某条 bodyByUse 生效，且不冲掉其它字段
+// 测试必须从**干净状态**开始：生成器会把草稿存 localStorage。
 try { localStorage.clear(); } catch (e) { /* 隐私模式等忽略 */ }
 
-// 真实用户故事：把「模型配置」里的内容粘回来接着改，改完再复制回去。
-// 这里验证的是**往返不丢东西** —— 走真实 UI（按钮、textarea），不是直接调函数。
 const lines = [];
 const frame = document.getElementById('frame');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+let legacyUpgraded = false;
 
 frame.onload = async () => {
     const w = frame.contentWindow, d = frame.contentDocument;
     const q = (s) => d.querySelector(s);
-    const qa = (s) => [...d.querySelectorAll(s)];
     const preview = () => d.getElementById('preview').textContent;
-    // JSON 对象**键序无语义** —— 生成器会按自己的字段顺序规范化输出
-    // （例如手写的 bodyMode 在 request 之前，导出后会变成 request 在前）。
-    // 所以比较要按"键排序后的规范形式"，不能用字符串全等，否则会把无害的键序变化误报成丢失。
+    const warnText = () => {
+        const b = d.getElementById('validationBox');
+        return b && !b.hidden ? b.textContent : '';
+    };
+    // JSON 对象**键序无语义** —— 生成器会按自己的字段顺序规范化输出。
+    // 所以比较要按"键排序后的规范形式"，不能用字符串全等。
     const canon = (s) => {
         const sort = (v) => {
             if (Array.isArray(v)) return v.map(sort);
@@ -44,8 +51,8 @@ frame.onload = async () => {
         await sleep(150);
     };
 
-    // ---- 1) 先造一份"用户已有配置"：含各种边角字段 ----
-    const original = {
+    // ---- 1) 导入一份"旧格式"配置：带 groups + 逐模型 bodyByUse 与各类边角字段 ----
+    const legacy = {
         version: 5,
         providers: [
             {
@@ -53,13 +60,19 @@ frame.onload = async () => {
                 apiKey: 'sk-ant-real', provider: 'anthropic', displayName: 'Claude 主用', timeout: 45,
                 request: { list_url: 'https://api.anthropic.com/v1/models' },
                 models: [
-                    { id: 'sonnet', name: 'claude-sonnet-4-5', kind: 'vision', contextWindow: 200000, maxTokens: 8192 },
+                    {
+                        id: 'sonnet', name: 'claude-sonnet-4-5', kind: 'vision', contextWindow: 200000, maxTokens: 8192,
+                        request: { bodyByUse: {
+                            chat: { temperature: 0.7, max_tokens: 4096 },
+                            'image-understanding': { max_tokens: 2048 },
+                        } },
+                    },
                     { id: 'haiku', name: 'claude-haiku-4-5' },
                 ],
             },
             {
                 api: 'openai-completions', baseURL: 'https://api.siliconflow.cn/v1',
-                apiKey: 'sk-sf', enabled: false,
+                apiKey: 'sk-sf',
                 models: [{
                     id: 'flux', name: 'black-forest-labs/FLUX.1-schnell', kind: 'gen',
                     bodyMode: 'replace',
@@ -71,79 +84,90 @@ frame.onload = async () => {
                 }],
             },
         ],
-        // 规范形态：purposes 的值是**有序数组**（生成器统一写数组）
         purposes: { chat: ['sonnet'], 'image-understanding': ['sonnet'], 'image-generation': ['flux'] },
+        // 旧机制遗留：导入时必须丢弃并警告
         groups: [
             { purposes: ['chat', 'summarization', 'judge'], body: { temperature: 0.7, max_tokens: 4096 } },
             { purposes: ['image-understanding'], body: { max_tokens: 2048 } },
         ],
     };
-    const originalText = JSON.stringify(original);
-
-    await importCfg(originalText);
+    await importCfg(JSON.stringify(legacy));
     const afterImport = preview();
-    lines.push('导入后与原文一致（按键序规范化比较）: ' + same(afterImport, originalText));
-    if (!same(afterImport, originalText)) {
-        lines.push('  原文: ' + originalText);
-        lines.push('  导入: ' + afterImport);
-    }
+    const cfgAfter = JSON.parse(afterImport);
+    lines.push('导入成功: ' + d.getElementById('importPanel').hidden);
+    lines.push('给出「用途组请求体已停用」警告: ' + (/用途组请求体/.test(warnText()) && /已停用/.test(warnText())));
+    lines.push('导出不再有 groups: ' + !/"groups"/.test(afterImport));
+    lines.push('逐模型 bodyByUse 原样保留: ' + (JSON.stringify(cfgAfter.providers[0].models[0].request.bodyByUse)
+        === JSON.stringify(legacy.providers[0].models[0].request.bodyByUse)));
+    lines.push('连接级 request 保留: ' + (cfgAfter.providers[0].request.list_url === 'https://api.anthropic.com/v1/models'));
+    lines.push('逐模型 body/response/params 保留: ' + (JSON.stringify(cfgAfter.providers[1].models[0].request)
+        === JSON.stringify(legacy.providers[1].models[0].request)));
 
     // ---- 2) 什么都不改，直接再走一次导入导出（幂等性） ----
     await importCfg(afterImport);
     const afterSecond = preview();
     lines.push('二次往返仍一致: ' + same(afterSecond, afterImport));
+    lines.push('二次导入不再有用途组警告: ' + !/用途组请求体/.test(warnText()));
 
-    // ---- 3) 界面上改一处（改 chat 的 body），确认改动生效且其它字段没被冲掉 ----
-    const gb = qa('.group-bodies');
-    lines.push('「请求体覆盖」区存在: ' + (gb.length === 1));
-    if (gb.length) {
-        gb[0].open = true;
-        await sleep(50);
-        const ta = gb[0].querySelector('textarea');
+    // ---- 3) 界面上改一条 bodyByUse，确认改动生效且其它字段没被冲掉 ----
+    q('.pcard .btn-edit').click();
+    await sleep(150);
+    const useEds = [...d.querySelectorAll('#panelBody .selected-list > .use-body-editor')];
+    // sonnet（vision，有 2 条）与 haiku（text，0 条）各一个折叠；flux 是 gen → 不提供入口
+    lines.push('');
+    lines.push('面板里「用途请求体」折叠数（sonnet + haiku）: ' + useEds.length);
+    const sonnetEd = useEds.find((e) => /已设置 2 条/.test(e.querySelector(':scope > summary').textContent));
+    lines.push('  sonnet 的折叠标了「已设置 2 条」: ' + !!sonnetEd);
+    const chatRow = sonnetEd
+        ? [...sonnetEd.querySelectorAll('.use-body-row')].find((r) => r.querySelector('select').value === 'chat')
+        : null;
+    lines.push('  找到 chat 那一行: ' + !!chatRow);
+    if (chatRow) {
+        const ta = chatRow.querySelector('textarea');
         ta.value = '{"temperature":0.2,"max_tokens":1234}';
         ta.dispatchEvent(new w.Event('input', { bubbles: true }));
-        await sleep(80);
+        await sleep(100);
     }
     const edited = JSON.parse(preview());
-    const chatG = edited.groups.find(g => g.purposes.includes('chat'));
-    lines.push('');
-    lines.push('改后 chat 组 body: ' + JSON.stringify(chatG.body));
+    lines.push('改后 bodyByUse.chat: ' + JSON.stringify(edited.providers[0].models[0].request.bodyByUse.chat));
     lines.push('改后仍有第二个连接: ' + (edited.providers.length === 2));
-    lines.push('改后 connection-level request 仍在: '
-        + JSON.stringify(edited.providers[0].request));
+    lines.push('改后 connection-level request 仍在: ' + JSON.stringify(edited.providers[0].request));
     lines.push('改后 displayName/timeout 仍在: '
         + JSON.stringify(edited.providers[0].displayName) + '/' + edited.providers[0].timeout);
     lines.push('改后逐模型 request.params 仍在: '
         + JSON.stringify(edited.providers[1].models[0].request.params));
-    lines.push('改后 disabled 连接仍是 enabled:false: ' + (edited.providers[1].enabled === false));
-    lines.push('改后 modelId 引用未被破坏: '
-        + JSON.stringify(edited.purposes));
+    lines.push('改后 modelId 引用未被破坏: ' + JSON.stringify(edited.purposes));
+    d.getElementById('panelCancel').click();
+    await sleep(100);
+    lines.push('取消编辑后预览回到导入结果（草稿被丢弃）: ' + same(preview(), afterSecond));
 
     // ---- 4) 把改后的再导入一次，确认仍稳定 ----
-    const editedText = preview();
+    const editedText = JSON.stringify(edited);
     await importCfg(editedText);
-    lines.push('');
     lines.push('改动后再往返一致: ' + same(preview(), editedText));
 
-    // 先把三个判定值**固化**：后面的单字符串升级测试会改状态，重算就失真了
-    const rtOk = same(afterImport, originalText);
+    // 固化判定值（后面的单字符串测试会改状态，重算就失真了）
+    const rtOk = !/"groups"/.test(afterImport)
+        && JSON.stringify(cfgAfter.providers[0].models[0].request.bodyByUse)
+            === JSON.stringify(legacy.providers[0].models[0].request.bodyByUse)
+        && cfgAfter.providers[0].request.list_url === 'https://api.anthropic.com/v1/models';
     const idemOk = same(afterSecond, afterImport);
-    const editOk = same(preview(), editedText);
-    const pass = rtOk && idemOk
-        && editOk
+    const editOk = same(preview(), editedText)
         && edited.providers.length === 2
-        && edited.providers[1].enabled === false
-        && JSON.stringify(edited.providers[1].models[0].request.params) === JSON.stringify(original.providers[1].models[0].request.params);
+        && edited.providers[0].models[0].request.bodyByUse.chat.max_tokens === 1234
+        && JSON.stringify(edited.providers[1].models[0].request.params)
+            === JSON.stringify(legacy.providers[1].models[0].request.params);
+    const pass = rtOk && idemOk && editOk;
 
-    // ---- 单字符串写法（手写配置常见）必须被**升级为有序数组**，且只升级形状、不改内容
+    // ---- 5) 单字符串写法（手写配置常见）必须被**升级为有序数组** ----
     {
-        const legacy = JSON.stringify({
+        const single = JSON.stringify({
             version: 5,
             providers: [{ api: 'openai-completions', baseURL: 'https://api.deepseek.com/v1', apiKey: 'k',
                 models: [{ id: 'm', name: 'deepseek-chat' }] }],
             purposes: { chat: 'm' },
         });
-        await importCfg(legacy);
+        await importCfg(single);
         const up = JSON.parse(preview());
         lines.push('');
         lines.push('单字符串 purposes 导入后: ' + JSON.stringify(up.purposes));
@@ -152,15 +176,14 @@ frame.onload = async () => {
         legacyUpgraded = Array.isArray(up.purposes.chat) && up.purposes.chat[0] === 'm';
     }
 
+    const summary = 'SUMMARY roundTrip=' + rtOk + ' idempotent=' + idemOk
+        + ' editStable=' + editOk + ' allPass=' + pass + ' legacyUpgraded=' + legacyUpgraded;
     lines.push('');
-    lines.push('SUMMARY roundTrip=' + rtOk + ' idempotent=' + idemOk
-        + ' editStable=' + editOk + ' allPass=' + pass + ' legacyUpgraded=' + legacyUpgraded);
-
+    lines.push(summary);
     document.getElementById('out').textContent = lines.join('\n');
     const s = document.createElement('div');
     s.id = 'summary';
-    s.textContent = 'SUMMARY roundTrip=' + rtOk + ' idempotent=' + idemOk
-        + ' editStable=' + editOk + ' allPass=' + pass + ' legacyUpgraded=' + legacyUpgraded;
+    s.textContent = summary;
     document.body.appendChild(s);
 };
 </script>

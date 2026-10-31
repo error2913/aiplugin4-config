@@ -280,13 +280,15 @@ export function templateIdForBaseUrl(baseUrl, api) {
  * 插件的 v5 校验对未知用途是**整份拒绝**，且联测 §G7 用 isDeepStrictEqual 比对两侧数组。
  * 不要在这里加 `decision` 之类的"别名用途"：那是新 purpose，会让老/新插件判定不一致。
  *
- * judge 统一叫「评分 / 决策（判定）」：插件侧它就是给消息打分、决定是否主动插话的那一路
- * （#146），不是单纯"评判"。改文案时 hint 一并更新，UI 会把 hint 显示在用途块里。
+ * judge 统一叫「评分」：插件侧它就是给消息打分、决定是否主动插话的那一路
+ * （#146），不是单纯"评判"，也不叫"决策"（没有 decision 这个用途键）。
+ * 它可以绑定**多个模型互相替换**（按顺序取用、失败往后切），选型提示见 PURPOSE_MODEL_HINTS。
+ * 改文案时 hint 一并更新，UI 会把 hint 显示在用途块里。
  */
 export const PURPOSES = [
     { key: 'chat', label: '对话', hint: '主对话' },
     { key: 'summarization', label: '总结', hint: '会话总结' },
-    { key: 'judge', label: '评分 / 决策（判定）', hint: '判定是否主动插话（评分/决策）' },
+    { key: 'judge', label: '评分', hint: '给每条消息评分、决定是否主动插话；可绑多个模型，按顺序互为替补' },
     { key: 'image-understanding', label: '图片识别', hint: '需 kind = vision' },
     { key: 'text-embedding', label: '向量记忆', hint: '需 kind = embed' },
     { key: 'tts', label: '语音合成', hint: '需 kind = tts' },
@@ -314,9 +316,11 @@ export const PURPOSES = [
 export const PURPOSE_MODEL_HINTS = {
     judge: {
         purpose: 'judge',
-        title: '评分 / 决策（判定）选型提示',
-        summary: '判定要给每条消息打分并决定是否主动插话：优先低延迟、低价、支持 JSON 结构化输出的模型；'
-            + '思考型模型更准但更慢更贵，通常建议关掉思考（用请求体覆盖 body.thinking / 厂商对应字段）。',
+        title: '评分用途选型提示',
+        summary: '评分用途要逐条消息打分、决定是否主动插话：优先低延迟、低价、支持 JSON 结构化输出的模型；'
+            + '它可以绑**多个模型互相替换**（按绑定顺序取用，失败时自动往后切），所以常见做法是'
+            + '主用低价档、再绑一个不同厂商的备选。思考型模型更准但更慢更贵，通常建议关掉思考'
+            + '（用该模型的「用途请求体」填 body.thinking / 厂商对应字段）。',
         disclaimer: '只提示、不预选：不会自动修改用途绑定。模型名与价格发布前请核对官方页（方案 §12 建议清单）。',
         priceTierLabels: { low: '低价档', mid: '中价档', high: '高价档' },
         capabilityLabels: { yes: '支持', no: '不支持', verify: '待核对' },

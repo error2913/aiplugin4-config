@@ -2,7 +2,7 @@
 // 运行：node tests/run.mjs
 import {
     validate, validateConfig, build, serialize, maskKeys, uniqueModelId, collectModelIds,
-    isEligibleKind, DEFAULT_USE_BODIES, JUDGE_PRESET_BODY, parseImport,
+    isEligibleKind, bodyUsePurposesForKind, parseImport,
 } from '../js/v5.js';
 import { classifyModel, decideKind } from '../js/classify.js';
 import {
@@ -126,7 +126,7 @@ console.log('\n=== 构建与序列化 ===');
     check('模型嵌套在 provider 内', Array.isArray(cfg.providers[0].models) && cfg.providers[0].models[0].id === 'm1');
     check('无顶层 models 字段', cfg.models === undefined);
     check('purposes 已写入为有序数组', Array.isArray(cfg.purposes.chat) && cfg.purposes.chat[0] === 'm1', JSON.stringify(cfg.purposes.chat));
-    check('groups 自动生成', Array.isArray(cfg.groups) && cfg.groups.length > 0);
+    check('不再输出 groups（用途组请求体机制已随插件移除）', cfg.groups === undefined, JSON.stringify(cfg.groups));
 
     const dense = serialize(cfg);
     check('密集格式（无换行）', !dense.includes('\n'), dense.slice(0, 60));
@@ -136,7 +136,7 @@ console.log('\n=== 构建与序列化 ===');
     const cfg2 = build([goodProvider({ models: [] })], {});
     check('空模型清单不写 models 字段', cfg2.providers[0].models === undefined, JSON.stringify(cfg2.providers[0]));
     check('空 purposes 不写该字段', cfg2.purposes === undefined);
-    check('空模型清单无 groups（无用途绑定）', cfg2.groups === undefined);
+    check('空模型清单仍不写 groups', cfg2.groups === undefined);
 
     // 启用开关：停用的连接直接移除，不写 enabled 字段；绑定到它模型的用途一并过滤
     const off = goodProvider({ enabled: false });
@@ -250,13 +250,13 @@ console.log('\n=== validateConfig：完整配置校验（与插件同口径） =
     const paths = (cfg) => validateConfig(cfg).map(i => i.path);
 
     check('合法配置无问题', validateConfig(base()).length === 0, JSON.stringify(validateConfig(base())));
-    // 这两条是联测发现的差异：UI 校验看不到 version/groups，必须由 validateConfig 覆盖
+    // 这两条是联测发现的差异：UI 校验看不到 version，必须由 validateConfig 覆盖
     check('version 不为 5 被拒', paths(base({ version: 4 })).includes('$.version'));
     check('缺 version 被拒', paths(base({ version: undefined })).includes('$.version'));
-    check('groups 空 purposes 被拒', paths(base({ groups: [{ purposes: [] }] })).includes('$.groups[0].purposes'));
-    check('groups 未知用途被拒', paths(base({ groups: [{ purposes: ['bogus'] }] })).includes('$.groups[0].purposes[0]'));
-    check('groups 非数组被拒', paths(base({ groups: {} })).includes('$.groups'));
-    check('合法 groups 通过', validateConfig(base({ groups: [{ purposes: ['chat'], body: { max_tokens: 1 } }] })).length === 0);
+    // groups 的校验已删除：字段不再受支持（导入时会丢弃并警告），不要在这里误报
+    check('groups 不再参与校验（未知键不报错）',
+        validateConfig(base({ groups: [{ purposes: [] }] })).length === 0,
+        JSON.stringify(validateConfig(base({ groups: {} }))));
     check('非对象配置被拒', validateConfig(null).some(i => i.path === '$'));
 
     // UI 校验应等价于"对 UI 状态构成的配置"做完整校验
@@ -324,85 +324,62 @@ console.log('\n=== build() 省略未定的 kind ===');
     check('省略 kind 的配置仍合法（kind 是可选的）', validateConfig(cfg).length === 0,
         JSON.stringify(validateConfig(cfg)));
 }
-console.log('\n=== 用途组 body 覆盖（DEFAULT_USE_BODIES / build 第三参） ===');
-{
-    const provs = [goodProvider({ models: [{ id: 'm1', name: 'deepseek-chat', kind: 'text' }] })];
-    const purposes = { chat: 'm1' };
-
-    const cfg0 = build(provs, purposes);
-    const g0 = cfg0.groups.find(g => g.purposes.includes('chat'));
-    check('默认 chat 组 body = DEFAULT_USE_BODIES.chat',
-        JSON.stringify(g0.body) === JSON.stringify(DEFAULT_USE_BODIES.chat), JSON.stringify(g0.body));
-
-    const custom = { max_tokens: 123, temperature: 0.2 };
-    const cfg1 = build(provs, purposes, { chat: custom });
-    const g1 = cfg1.groups.find(g => g.purposes.includes('chat'));
-    check('覆盖生效', JSON.stringify(g1.body) === JSON.stringify(custom), JSON.stringify(g1.body));
-    check('覆盖后仍合法', validateConfig(cfg1).length === 0, JSON.stringify(validateConfig(cfg1)));
-
-    const cfg2 = build(provs, { chat: 'm1', 'text-embedding': 'm1' }, { chat: custom });
-    const g2e = cfg2.groups.find(g => g.purposes.includes('text-embedding'));
-    check('未覆盖的用途组仍用默认',
-        JSON.stringify(g2e.body) === JSON.stringify(DEFAULT_USE_BODIES['text-embedding']),
-        JSON.stringify(g2e.body));
-
-    const cfg3 = build(provs, purposes, { chat: [1, 2, 3] });
-    const g3 = cfg3.groups.find(g => g.purposes.includes('chat'));
-    check('非对象覆盖值回退默认（不写坏配置）',
-        JSON.stringify(g3.body) === JSON.stringify(DEFAULT_USE_BODIES.chat), JSON.stringify(g3.body));
-
-    const cfg4 = build(provs, { chat: 'm1' });
-    check('未绑定的用途不产组', cfg4.groups.length === 1, JSON.stringify(cfg4.groups.map(g => g.purposes)));
-
-    const cfg5 = build(provs, { chat: 'm1', summarization: 'm1', judge: 'm1', 'image-understanding': 'm1', 'text-embedding': 'm1' });
-    const chatG = cfg5.groups.find(g => g.purposes.includes('chat'));
-    check('chat 系三个用途共用一个组',
-        JSON.stringify(chatG.purposes) === JSON.stringify(['chat', 'summarization', 'judge']),
-        JSON.stringify(chatG.purposes));
-}
-
-console.log('\n=== 逐模型 request 覆盖（build 透传） ===');
+console.log('\n=== 逐模型 request 覆盖（build 原样透传，含 bodyByUse） ===');
 {
     const req = { body: { model: '{model}', prompt: '{prompt}' }, response: { data_path: 'data.0.url' } };
     const cfg = build([goodProvider({
         models: [
             { id: 'g1', name: 'qwen-image-3.0-pro', kind: 'gen', request: req, bodyMode: 'replace' },
-            { id: 't1', name: 'deepseek-chat', kind: 'text' },
+            { id: 't1', name: 'deepseek-chat', kind: 'text',
+              request: { bodyByUse: { judge: { temperature: 0, max_tokens: 300 } } } },
+            { id: 't2', name: 'deepseek-chat-2', kind: 'text' },
         ],
-    })], { 'image-generation': 'g1' });
+    })], { 'image-generation': 'g1', judge: 't1' });
     const m0 = cfg.providers[0].models[0];
-    check('request 透传', JSON.stringify(m0.request) === JSON.stringify(req), JSON.stringify(m0.request));
+    const m1 = cfg.providers[0].models[1];
+    const m2 = cfg.providers[0].models[2];
+    check('request 原样透传', JSON.stringify(m0.request) === JSON.stringify(req),
+        JSON.stringify(m0.request));
     check('bodyMode 透传', m0.bodyMode === 'replace', String(m0.bodyMode));
+    check('bodyByUse 逐字节保留',
+        JSON.stringify(m1.request.bodyByUse) === '{"judge":{"temperature":0,"max_tokens":300}}',
+        JSON.stringify(m1.request.bodyByUse));
     check('没有覆盖的模型不带 request/bodyMode',
-        !('request' in cfg.providers[0].models[1]) && !('bodyMode' in cfg.providers[0].models[1]),
-        JSON.stringify(cfg.providers[0].models[1]));
-    check('带 request 的配置仍合法', validateConfig(cfg).length === 0, JSON.stringify(validateConfig(cfg)));
+        !('request' in m2) && !('bodyMode' in m2), JSON.stringify(m2));
+    check('带 request/bodyByUse 的配置仍合法', validateConfig(cfg).length === 0, JSON.stringify(validateConfig(cfg)));
+    check('build 不额外输出 groups', cfg.groups === undefined, JSON.stringify(cfg.groups));
 
     const cfg2 = build([goodProvider({ models: [{ id: 'a', name: 'x', request: {} }] })], {});
     check('空 request 不写进配置', !('request' in cfg2.providers[0].models[0]),
         JSON.stringify(cfg2.providers[0].models[0]));
+
+    // 默认（0 条用途请求体）：不带 bodyByUse，整个 request 都不出现
+    const cfg3 = build([goodProvider({ models: [{ id: 'a', name: 'x', kind: 'text' }] })], { chat: 'a' });
+    check('默认 0 条用途请求体 → 不写 request',
+        !('request' in cfg3.providers[0].models[0]), JSON.stringify(cfg3.providers[0].models[0]));
 }
+
 console.log('\n=== 导入：parseImport（build 的逆） ===');
 {
     const provs = [goodProvider({
         displayName: '主连接', timeout: 30, request: { list_url: 'https://x/models' },
         models: [
-            { id: 'flash', name: 'deepseek-v4-flash' },
+            { id: 'flash', name: 'deepseek-v4-flash',
+              request: { bodyByUse: { chat: { max_tokens: 65536, temperature: 1 }, summarization: { max_tokens: 300 } } } },
             { id: 'flux', name: 'flux-1', kind: 'gen', contextWindow: 128000, maxTokens: 4096,
               request: { body: { model: '{model}', prompt: '{prompt}' }, response: { data_path: 'd.0.url' } },
               bodyMode: 'replace' },
         ],
     })];
     const purposes = { chat: 'flash', 'image-generation': 'flux' };
-    const useBodies = { chat: { max_tokens: 999 } };
 
-    const cfg = build(provs, purposes, useBodies);
+    const cfg = build(provs, purposes);
     const res = parseImport(serialize(cfg));
     check('导入成功', res.ok, JSON.stringify(res.issues));
-    check('无警告（标准分组）', res.warnings.length === 0, JSON.stringify(res.warnings));
+    check('无警告（配置里没有 groups）', res.warnings.length === 0, JSON.stringify(res.warnings));
 
     // 往返必须逐字节一致
-    const again = build(res.state.providers, res.state.purposes, res.state.useBodies, res.state.extraGroups);
+    const again = build(res.state.providers, res.state.purposes);
     check('往返逐字节一致', JSON.stringify(again) === JSON.stringify(cfg),
         `\n    cfg1=${JSON.stringify(cfg)}\n    cfg2=${JSON.stringify(again)}`);
 
@@ -415,12 +392,16 @@ console.log('\n=== 导入：parseImport（build 的逆） ===');
     check('模型 contextWindow/maxTokens 保留',
         p0.models[1].contextWindow === 128000 && p0.models[1].maxTokens === 4096,
         JSON.stringify(p0.models[1]));
+    check('逐模型 request 原样保留（含 bodyByUse）',
+        p0.models[0].request && JSON.stringify(p0.models[0].request) === JSON.stringify(provs[0].models[0].request),
+        JSON.stringify(p0.models[0].request));
     check('逐模型 request/bodyMode 保留',
         p0.models[1].bodyMode === 'replace' && !!p0.models[1].request,
         JSON.stringify(p0.models[1]));
     check('未声明 kind 的模型不带 kind', !('kind' in p0.models[0]), JSON.stringify(p0.models[0]));
-    check('useBodies 从 groups 还原', JSON.stringify(res.state.useBodies.chat) === '{"max_tokens":999}',
-        JSON.stringify(res.state.useBodies));
+    check('state 只含 providers / purposes',
+        JSON.stringify(Object.keys(res.state).sort()) === '["providers","purposes"]',
+        JSON.stringify(Object.keys(res.state)));
     check('provider 留空保持留空', p0.provider === '', JSON.stringify(p0.provider));
     check('enabled 默认 true', p0.enabled === true);
 }
@@ -450,9 +431,10 @@ console.log('\n=== 导入：拒绝非法内容（不能改坏现有配置） ===
     }
 }
 
-console.log('\n=== 导入：非标准用途组原样保留 + 警告 ===');
+console.log('\n=== 导入：旧配置的 groups 已停用 → 丢弃 + 明确警告 ===');
 {
-    // 手写配置：一个不属于标准分组（对话系/识图/嵌入）的用途组
+    // 插件侧删掉了用途组机制，请求体覆盖改走 models[].request.bodyByUse。
+    // 旧导出/手写配置里的 groups 不能把整份导入弄失败，但也不能静默吞掉 —— 丢弃 + 警告。
     const text = JSON.stringify({
         version: 5,
         providers: [{
@@ -461,27 +443,25 @@ console.log('\n=== 导入：非标准用途组原样保留 + 警告 ===');
         }],
         purposes: { chat: 'm' },
         groups: [{ purposes: ['chat'], body: { max_tokens: 7 } }],
+        // 旧 UI 草稿键（不是 v5 配置字段）：一并忽略，不该让导入失败
+        useBodies: { chat: { max_tokens: 7 } },
+        judgePreset: true,
     });
     const r = parseImport(text);
     check('仍导入成功', r.ok, JSON.stringify(r.issues));
-    check('有警告（分组表达不出来）', r.warnings.length > 0, JSON.stringify(r.warnings));
-    check('该组进了 extraGroups', r.state.extraGroups.length === 1,
-        JSON.stringify(r.state.extraGroups));
-    check('该组内容原样保留',
-        JSON.stringify(r.state.extraGroups[0]) === '{"purposes":["chat"],"body":{"max_tokens":7}}',
-        JSON.stringify(r.state.extraGroups[0]));
+    check('有警告（用途组请求体已停用）',
+        r.warnings.some(w => /用途组请求体/.test(w) && /已停用/.test(w)), JSON.stringify(r.warnings));
+    check('state 只含 providers / purposes（不含 groups/useBodies/judgePreset）',
+        JSON.stringify(Object.keys(r.state).sort()) === '["providers","purposes"]',
+        JSON.stringify(Object.keys(r.state)));
+    const out = build(r.state.providers, r.state.purposes);
+    check('导出不再包含 groups', out.groups === undefined, JSON.stringify(out.groups));
+    check('导出仍合法', validateConfig(out).length === 0, JSON.stringify(validateConfig(out)));
 
-    // 导出：extraGroups 原样附后，且被它覆盖的用途不再由标准分组重复给
-    const out = build(r.state.providers, r.state.purposes, r.state.useBodies, r.state.extraGroups);
-    const chatGroups = out.groups.filter(g => g.purposes.includes('chat'));
-    check('chat 只出现在一个组里（不重复）', chatGroups.length === 1,
-        JSON.stringify(out.groups));
-    check('保留的组是原样那个', JSON.stringify(chatGroups[0]) === '{"purposes":["chat"],"body":{"max_tokens":7}}',
-        JSON.stringify(chatGroups[0]));
-
-    // 再往返一次仍稳定
+    // 往返稳定：导出的配置里没有 groups，再导入不会再报该警告
     const r2 = parseImport(serialize(out));
-    check('二次往返仍稳定', r2.ok && r2.state.extraGroups.length === 1, JSON.stringify(r2.warnings));
+    check('二次导入不再有用途组警告',
+        r2.ok && !r2.warnings.some(w => /用途组请求体/.test(w)), JSON.stringify(r2.warnings));
 }
 
 console.log('\n=== 导入：旧配置里的 compression 用途被清洗 + 警告 ===');
@@ -511,18 +491,13 @@ console.log('\n=== 导入：旧配置里的 compression 用途被清洗 + 警告
     check('  给出明确警告', r.warnings.some(w => /压缩/.test(w)), JSON.stringify(r.warnings));
     check('  用途绑定里 compression 已剔除', !('compression' in r.state.purposes),
         JSON.stringify(r.state.purposes));
-    check('  chat 组里的 compression 被过滤（body 仍还原）',
-        JSON.stringify(r.state.useBodies.chat) === '{"max_tokens":5}', JSON.stringify(r.state.useBodies));
-    check('  只含 compression 的组被删除（不残留成 extraGroups）',
-        r.state.extraGroups.length === 0, JSON.stringify(r.state.extraGroups));
+    check('  旧 groups 也丢弃并警告', r.warnings.some(w => /用途组请求体/.test(w)), JSON.stringify(r.warnings));
 
-    // 再导出：配置合法、且彻底不再出现 compression
-    const out = build(r.state.providers, r.state.purposes, r.state.useBodies, r.state.extraGroups);
+    // 再导出：配置合法、彻底不再出现 compression 与 groups
+    const out = build(r.state.providers, r.state.purposes);
     check('  导出后配置合法', validateConfig(out).length === 0, JSON.stringify(validateConfig(out)));
     check('  导出后不再出现 compression', !serialize(out).includes('compression'), serialize(out));
-    check('  导出后 chat 组是三项',
-        JSON.stringify(out.groups[0].purposes) === JSON.stringify(['chat', 'summarization', 'judge']),
-        JSON.stringify(out.groups));
+    check('  导出后没有 groups', out.groups === undefined, JSON.stringify(out.groups));
 
     // 极端情况：只绑了 compression（别的用途都没有）→ 清洗后成了空绑定，也不能报错
     const only = mkLegacy();
@@ -533,23 +508,6 @@ console.log('\n=== 导入：旧配置里的 compression 用途被清洗 + 警告
         JSON.stringify(r2.state.purposes));
 }
 
-console.log('\n=== 导入：绑了用途但配置里没有对应分组 body → 提示会补默认 ===');
-{
-    const text = JSON.stringify({
-        version: 5,
-        providers: [{
-            api: 'openai-completions', baseURL: 'https://api.deepseek.com/v1', apiKey: 'k',
-            models: [{ id: 'm', name: 'deepseek-chat' }],
-        }],
-        purposes: { chat: 'm' },
-    });
-    const r = parseImport(text);
-    check('导入成功', r.ok, JSON.stringify(r.issues));
-    check('提示会补内置默认 body', r.warnings.some(w => /内置默认/.test(w)), JSON.stringify(r.warnings));
-    const out = build(r.state.providers, r.state.purposes, r.state.useBodies, r.state.extraGroups);
-    check('导出时确实补上了 chat 组', (out.groups || []).some(g => g.purposes.includes('chat')),
-        JSON.stringify(out.groups));
-}
 console.log('\n=== vendorByEndpointPath：host 认不出时按路径反查 ===');
 {
     // 必须与插件 vendor.ts 的 vendorByUrlSuffix 同规则（跨仓库联测 §M 逐条比对）
@@ -603,7 +561,7 @@ console.log('\n=== 导入时补上缺失的 provider（仅当路径能认出） 
         JSON.stringify(r.state.providers[0].provider));
     check('  有明确警告（不静默改数据）', r.warnings.some(w => /补上 provider/.test(w)),
         JSON.stringify(r.warnings));
-    const out = build(r.state.providers, r.state.purposes, r.state.useBodies, r.state.extraGroups);
+    const out = build(r.state.providers, r.state.purposes);
     check('  导出后配置里确实有 provider', out.providers[0].provider === 'dashscope',
         JSON.stringify(out.providers[0].provider));
     check('  补完后配置仍合法', validateConfig(out).length === 0, JSON.stringify(validateConfig(out)));
@@ -693,7 +651,7 @@ console.log('\n=== 拉取错误的分类文案（方案 9.3.2） ===');
     check('kind 取值集合固定', kinds.length === 6);
 }
 
-console.log('\n=== 用途表守卫（§12.4）：键与顺序固定，judge = 评分 / 决策（判定） ===');
+console.log('\n=== 用途表守卫（§12.4）：键与顺序固定，judge = 评分 ===');
 {
     // 插件侧已有同样的守卫（scripts/integration-config-generator.mjs §G7：
     // isDeepStrictEqual(PURPOSES.map(p=>p.key), MODEL_USES)）。生成器这边也钉死一份：
@@ -709,12 +667,14 @@ console.log('\n=== 用途表守卫（§12.4）：键与顺序固定，judge = �
         PURPOSES.length === 7 && !PURPOSES.some(p => ['decision', 'compression'].includes(p.key)),
         JSON.stringify(PURPOSES.map(p => p.key)));
     const judge = PURPOSES.find(p => p.key === 'judge');
-    check('judge 标签 =「评分 / 决策（判定）」', judge.label === '评分 / 决策（判定）', judge.label);
-    check('judge hint 是评分/决策表述', /评分/.test(judge.hint) && /决策/.test(judge.hint), judge.hint);
+    check('judge 标签 =「评分」', judge.label === '评分', judge.label);
+    check('judge hint 是评分用途说明', /评分/.test(judge.hint), judge.hint);
+    check('judge hint 提到可绑多个模型（互为替补）', /多个/.test(judge.hint) && /替补/.test(judge.hint), judge.hint);
+    check('judge 不再叫「评分 / 决策（判定）」', !/决策/.test(judge.label) && !/判定/.test(judge.label), judge.label);
     check('每个用途都有 label/hint', PURPOSES.every(p => !!p.label && !!p.hint));
 }
 
-console.log('\n=== 判定模型选型提示 PURPOSE_MODEL_HINTS（§12.2：结构化、只提示不预选） ===');
+console.log('\n=== 评分模型选型提示 PURPOSE_MODEL_HINTS（§12.2：结构化、只提示不预选） ===');
 {
     const hint = PURPOSE_MODEL_HINTS.judge;
     check('存在 judge 提示', !!hint);
@@ -723,13 +683,17 @@ console.log('\n=== 判定模型选型提示 PURPOSE_MODEL_HINTS（§12.2：结�
         JSON.stringify(Object.keys(PURPOSE_MODEL_HINTS)));
     check('没有 decision 提示键', !('decision' in PURPOSE_MODEL_HINTS));
     check('带 title / summary / disclaimer', !!hint.title && !!hint.summary && !!hint.disclaimer);
+    check('标题是评分用途选型提示（不再叫判定/决策）',
+        /评分/.test(hint.title) && !/判定|决策/.test(hint.title), hint.title);
+    check('说明提到可绑多个互相替换的模型',
+        /多个/.test(hint.summary) && /替换|替补/.test(hint.summary), hint.summary.slice(0, 120));
     check('priceTierLabels 覆盖 low/mid/high',
         ['low', 'mid', 'high'].every(k => !!hint.priceTierLabels[k]));
     check('capabilityLabels 覆盖 yes/no/verify',
         ['yes', 'no', 'verify'].every(k => !!hint.capabilityLabels[k]));
 
     const vendors = Array.isArray(hint.vendors) ? hint.vendors : [];
-    check('vendor 决策候选非空', vendors.length > 0, String(vendors.length));
+    check('vendor 评分候选非空', vendors.length > 0, String(vendors.length));
     const badShape = [];
     const badTier = [];
     const badCap = [];
@@ -757,11 +721,11 @@ console.log('\n=== 判定模型选型提示 PURPOSE_MODEL_HINTS（§12.2：结�
     check('提示数据不进入生成配置', !serialize(build(provs, { judge: 'm1' })).includes('PURPOSE_MODEL_HINTS'));
 }
 
-console.log('\n=== 可选判定请求体预设（§12.3）：关闭时逐字节不变 ===');
+console.log('\n=== build() 输出结构：不再有 groups（用途组请求体已随插件移除） ===');
 {
-    // **改动前**（git 9262b4e）实测的 build 输出，逐字节抄下来当基线。
-    // 只要关闭预设的路径有任何漂移（键序/默认 body/多出字段），这里立刻失败。
-    const BASELINE = '{"version":5,"providers":[{"api":"openai-completions","baseURL":"https://api.deepseek.com/v1","apiKey":"sk-a","models":[{"id":"flash","name":"deepseek-flash","kind":"vision"},{"id":"pro","name":"deepseek-pro","kind":"text"}]}],"purposes":{"chat":["flash"],"summarization":["flash"],"judge":["pro"],"image-understanding":["flash"]},"groups":[{"purposes":["chat","summarization","judge"],"body":{"temperature":1,"top_p":1,"max_tokens":8192,"stop":null,"stream":false}},{"purposes":["image-understanding"],"body":{"temperature":1,"max_tokens":2048,"stop":null,"stream":false}}]}';
+    // 基线 = **移除 groups 之后** build 的逐字节输出。只要键序 / 字段有漂移，这里立刻失败。
+    // （旧基线里的 groups 由 build 派生；那套机制已随插件删除，见 docs/13 的后续修订。）
+    const BASELINE = '{"version":5,"providers":[{"api":"openai-completions","baseURL":"https://api.deepseek.com/v1","apiKey":"sk-a","models":[{"id":"flash","name":"deepseek-flash","kind":"vision"},{"id":"pro","name":"deepseek-pro","kind":"text"}]}],"purposes":{"chat":["flash"],"summarization":["flash"],"judge":["pro"],"image-understanding":["flash"]}}';
     const provs = [{
         id: 'c1', templateId: 'deepseek', mode: 'vendor', provider: '', api: 'openai-completions',
         baseURL: 'https://api.deepseek.com/v1', apiKey: 'sk-a',
@@ -773,122 +737,128 @@ console.log('\n=== 可选判定请求体预设（§12.3）：关闭时逐字节�
     }];
     const purposes = { chat: ['flash'], summarization: ['flash'], judge: ['pro'], 'image-understanding': ['flash'] };
 
-    check('不传 options → 输出逐字节等于改动前基线', serialize(build(provs, purposes)) === BASELINE,
-        serialize(build(provs, purposes)));
-    check('显式 judgePreset:false → 同样逐字节等于基线',
-        serialize(build(provs, purposes, undefined, undefined, { judgePreset: false })) === BASELINE);
-    const off = build(provs, purposes);
-    check('关闭时没有独立 judge 组', !off.groups.some(g => g.purposes.length === 1 && g.purposes[0] === 'judge'));
-    check('关闭时不出现 response_format', !serialize(off).includes('response_format'));
-
-    // ---- 开启 ----
-    const on = build(provs, purposes, undefined, undefined, { judgePreset: true });
-    const chatGroup = on.groups.find(g => g.purposes.includes('chat'));
-    check('开启后 chat 组不再包含 judge',
-        JSON.stringify(chatGroup.purposes) === JSON.stringify(['chat', 'summarization']),
-        JSON.stringify(chatGroup.purposes));
-    const judgeGroup = on.groups.find(g => g.purposes.length === 1 && g.purposes[0] === 'judge');
-    check('开启后 judge 独立成组', !!judgeGroup, JSON.stringify(on.groups));
-    check('judge body = JUDGE_PRESET_BODY（temperature 0 / max_tokens 300 / json_object）',
-        !!judgeGroup && JSON.stringify(judgeGroup.body) === JSON.stringify({
-            temperature: 0, max_tokens: 300, response_format: { type: 'json_object' },
-        }), JSON.stringify(judgeGroup && judgeGroup.body));
-    check('预设 body 与导出常量一致',
-        !!judgeGroup && JSON.stringify(judgeGroup.body) === JSON.stringify(JUDGE_PRESET_BODY));
-    check('开启后完整配置通过生成器校验（插件同口径）', validateConfig(on).length === 0,
-        JSON.stringify(validateConfig(on)));
-    check('judge 仍只出现在一个组里', on.groups.filter(g => g.purposes.includes('judge')).length === 1,
-        JSON.stringify(on.groups.map(g => g.purposes)));
-
-    // 预设只是给 judge 组一个 body，不改绑定本身
-    check('开启不改变 purposes 绑定', JSON.stringify(on.purposes) === JSON.stringify(build(provs, purposes).purposes));
-
-    // 只绑 judge：不应产生 chat 组
-    const only = build(provs, { judge: 'pro' }, undefined, undefined, { judgePreset: true });
-    check('只绑 judge 时只产 judge 组',
-        only.groups.length === 1 && JSON.stringify(only.groups[0].purposes) === JSON.stringify(['judge']),
-        JSON.stringify(only.groups.map(g => g.purposes)));
-
-    // judge 未绑定 → 开关不生效（不写无用 body，输出与关闭一致）
-    check('judge 未绑定时开关不改变输出',
-        serialize(build(provs, { chat: 'flash' }, undefined, undefined, { judgePreset: true }))
-        === serialize(build(provs, { chat: 'flash' })));
-
-    // 高级覆盖：useBodies.judge 可替换预设 body（不按 vendor 猜字段，用户自己填）
-    const custom = build(provs, purposes, { judge: { temperature: 0, max_tokens: 123 } }, undefined, { judgePreset: true });
-    const customJudge = custom.groups.find(g => g.purposes.length === 1 && g.purposes[0] === 'judge');
-    check('useBodies.judge 可覆盖预设 body',
-        !!customJudge && JSON.stringify(customJudge.body) === '{"temperature":0,"max_tokens":123}',
-        JSON.stringify(customJudge && customJudge.body));
-    check('覆盖后仍合法', validateConfig(custom).length === 0, JSON.stringify(validateConfig(custom)));
+    const out = build(provs, purposes);
+    check('逐字节等于新基线', serialize(out) === BASELINE, serialize(out));
+    check('输出不含 groups', out.groups === undefined, JSON.stringify(out.groups));
+    check('输出不含 useBodies / judgePreset',
+        !('useBodies' in out) && !('judgePreset' in out), JSON.stringify(Object.keys(out)));
+    check('输出键只有 version / providers / purposes',
+        JSON.stringify(Object.keys(out)) === '["version","providers","purposes"]', JSON.stringify(Object.keys(out)));
+    // 旧调用方可能还按旧签名多传参数 build(providers, purposes, useBodies, extraGroups, options)：
+    // 直接忽略，**不会**凭空产出 groups。
+    const legacyCall = build(provs, purposes, { chat: { max_tokens: 1 } }, [{ purposes: ['chat'] }], { judgePreset: true });
+    check('旧参数被忽略（不产 groups、输出不变）', serialize(legacyCall) === BASELINE, serialize(legacyCall));
+    check('不出现 response_format（判定预设 body 已删除）', !serialize(out).includes('response_format'));
 }
 
-console.log('\n=== 判定预设：导入→导出往返不漂移 + groups 顺序守卫（§12.3/§12.4） ===');
+console.log('\n=== 逐模型「用途请求体」：kind 过滤 + bodyByUse 校验 ===');
 {
-    const provs = [{
-        id: 'c1', templateId: 'deepseek', mode: 'vendor', provider: '', api: 'openai-completions',
-        baseURL: 'https://api.deepseek.com/v1', apiKey: 'sk-a',
+    // UI 用 bodyUsePurposesForKind 决定某模型类型下能加哪些用途（与插件 isEligible 同规则）
+    const keys = (kind) => bodyUsePurposesForKind(kind).map(p => p.key);
+    check('text → chat / summarization / judge',
+        JSON.stringify(keys('text')) === '["chat","summarization","judge"]', JSON.stringify(keys('text')));
+    check('kind 缺省按 text 处理', JSON.stringify(keys(undefined)) === JSON.stringify(keys('text')));
+    check('vision → 再加 image-understanding',
+        JSON.stringify(keys('vision')) === '["chat","summarization","judge","image-understanding"]',
+        JSON.stringify(keys('vision')));
+    for (const k of ['embed', 'gen', 'tts']) {
+        check(`${k} 不提供入口（空数组）`, keys(k).length === 0, JSON.stringify(keys(k)));
+    }
+    check('返回的用途都在 PURPOSES 里',
+        bodyUsePurposesForKind('vision').every(p => PURPOSES.some(x => x.key === p.key)));
+
+    const base = (over = {}) => ({
+        version: 5,
+        providers: [{
+            api: 'openai-completions', baseURL: 'https://api.deepseek.com/v1', apiKey: 'sk-x',
+            models: [{ id: 'm1', name: 'deepseek-chat', kind: 'text', ...over }],
+        }],
+        purposes: { chat: 'm1' },
+    });
+    const paths = (cfg) => validateConfig(cfg).map(i => i.path);
+
+    check('合法 bodyByUse 通过',
+        validateConfig(base({ request: { bodyByUse: { chat: { max_tokens: 65536, temperature: 1 } } } })).length === 0,
+        JSON.stringify(validateConfig(base({ request: { bodyByUse: { chat: { max_tokens: 1 } } } }))));
+    check('未知用途被拒',
+        paths(base({ request: { bodyByUse: { bogus: { max_tokens: 1 } } } }))
+            .includes('$.providers[0].models[0].request.bodyByUse.bogus'),
+        JSON.stringify(paths(base({ request: { bodyByUse: { bogus: {} } } }))));
+    check('bodyByUse 非对象被拒',
+        paths(base({ request: { bodyByUse: [] } })).includes('$.providers[0].models[0].request.bodyByUse'));
+    check('请求体值非对象被拒',
+        paths(base({ request: { bodyByUse: { chat: 5 } } })).includes('$.providers[0].models[0].request.bodyByUse.chat'));
+    check('thinking 是字符串被拒（插件同口径）',
+        paths(base({ request: { bodyByUse: { chat: { thinking: 'disabled' } } } }))
+            .includes('$.providers[0].models[0].request.bodyByUse.chat.thinking'),
+        JSON.stringify(paths(base({ request: { bodyByUse: { chat: { thinking: 'disabled' } } } }))));
+    check('thinking：null 允许（等同于没写）',
+        validateConfig(base({ request: { bodyByUse: { chat: { thinking: null } } } })).length === 0);
+    check('thinking 是对象通过（厂商字段由用户自填）',
+        validateConfig(base({ request: { bodyByUse: { chat: { thinking: { type: 'disabled' } } } } })).length === 0,
+        JSON.stringify(validateConfig(base({ request: { bodyByUse: { chat: { thinking: { type: 'disabled' } } } } }))));
+    check('类型不匹配被拒（text 模型用 image-understanding 覆盖）',
+        paths(base({ request: { bodyByUse: { 'image-understanding': { max_tokens: 1 } } } }))
+            .includes('$.providers[0].models[0].request.bodyByUse.image-understanding'));
+    check('request 非对象被拒',
+        paths(base({ request: [] })).includes('$.providers[0].models[0].request'));
+}
+
+console.log('\n=== 逐模型「用途请求体」：导入→导出往返 + 空默认 ===');
+{
+    const provs = [goodProvider({
         models: [
-            { id: 'flash', name: 'deepseek-flash', kind: 'vision' },
+            { id: 'flash', name: 'deepseek-flash', kind: 'vision',
+              request: { bodyByUse: {
+                  chat: { max_tokens: 65536, temperature: 1 },
+                  judge: { temperature: 0, max_tokens: 300, response_format: { type: 'json_object' } },
+                  'image-understanding': { max_tokens: 2048 },
+              } } },
             { id: 'pro', name: 'deepseek-pro', kind: 'text' },
         ],
-        enabled: true, displayName: '', timeout: 0, request: {},
-    }];
-    const purposes = { chat: ['flash'], summarization: ['flash'], judge: ['pro'], 'image-understanding': ['flash'] };
-    const on = build(provs, purposes, undefined, undefined, { judgePreset: true });
+    })];
+    const purposes = { chat: ['flash'], summarization: ['flash'], judge: ['flash'] };
+    const cfg = build(provs, purposes);
+    const text = serialize(cfg);
 
-    const rt = parseImport(serialize(on));
+    const rt = parseImport(text);
     check('导入成功', rt.ok, JSON.stringify(rt.issues));
-    check('导入识别 judgePreset', rt.state.judgePreset === true);
-    check('judge body 还原进 useBodies.judge',
-        JSON.stringify(rt.state.useBodies.judge) === JSON.stringify(JUDGE_PRESET_BODY),
-        JSON.stringify(rt.state.useBodies.judge));
-    check('judge 预设组没被误当非标准分组', rt.state.extraGroups.length === 0,
-        JSON.stringify(rt.state.extraGroups));
-    const again = build(rt.state.providers, rt.state.purposes, rt.state.useBodies, rt.state.extraGroups,
-        { judgePreset: rt.state.judgePreset });
-    check('开启预设往返逐字节一致', serialize(again) === serialize(on),
-        `\n    前=${serialize(on)}\n    后=${serialize(again)}`);
+    check('导入无警告', rt.warnings.length === 0, JSON.stringify(rt.warnings));
+    check('bodyByUse 原样保留',
+        JSON.stringify(rt.state.providers[0].models[0].request.bodyByUse)
+        === JSON.stringify(provs[0].models[0].request.bodyByUse),
+        JSON.stringify(rt.state.providers[0].models[0].request));
+    const again = build(rt.state.providers, rt.state.purposes);
+    check('导入→导出逐字节一致', serialize(again) === text,
+        `\n    前=${text}\n    后=${serialize(again)}`);
     const rt2 = parseImport(serialize(again));
-    const again2 = build(rt2.state.providers, rt2.state.purposes, rt2.state.useBodies, rt2.state.extraGroups,
-        { judgePreset: rt2.state.judgePreset });
-    check('二次往返仍一致', serialize(again2) === serialize(on));
+    check('二次往返仍一致', serialize(build(rt2.state.providers, rt2.state.purposes)) === text);
 
-    // ---- 默认（关闭）路径的分组顺序守卫 ----
-    const off = build(provs, purposes);
-    check('默认 groups[0].purposes 顺序固定（chat,summarization,judge）',
-        JSON.stringify(off.groups[0].purposes) === JSON.stringify(['chat', 'summarization', 'judge']),
-        JSON.stringify(off.groups[0].purposes));
-    check('默认 groups 整体顺序固定（对话系 → 识图 → 嵌入）',
-        JSON.stringify(off.groups.map(g => g.purposes)) === JSON.stringify([
-            ['chat', 'summarization', 'judge'], ['image-understanding'],
-        ]), JSON.stringify(off.groups.map(g => g.purposes)));
-    const rtOff = parseImport(serialize(off));
-    const offAgain = build(rtOff.state.providers, rtOff.state.purposes, rtOff.state.useBodies,
-        rtOff.state.extraGroups, { judgePreset: rtOff.state.judgePreset });
-    check('默认路径导入往返逐字节一致', serialize(offAgain) === serialize(off),
-        `\n    前=${serialize(off)}\n    后=${serialize(offAgain)}`);
-    check('默认路径往返后 groups 顺序不变',
-        JSON.stringify(offAgain.groups.map(g => g.purposes)) === JSON.stringify(off.groups.map(g => g.purposes)));
+    // 空默认：0 条用途请求体 = 不写 bodyByUse、整个 request 都不出现
+    const empty = build([goodProvider({ models: [{ id: 'pro', name: 'deepseek-pro', kind: 'text' }] })], { chat: 'pro' });
+    check('默认 0 条 → 模型不带 request',
+        !('request' in empty.providers[0].models[0]), JSON.stringify(empty.providers[0].models[0]));
+    check('空默认往返后仍不带 request',
+        !('request' in parseImport(serialize(empty)).state.providers[0].models[0]));
 
-    // ---- 旧/手写配置：有 ['judge'] 组但 judge 未绑定 → 不误识别，按非标准分组原样保留 ----
+    // 旧配置带 groups：groups 丢弃，但 models[].request 必须原样活着
     const legacy = JSON.stringify({
         version: 5,
         providers: [{
             api: 'openai-completions', baseURL: 'https://api.deepseek.com/v1', apiKey: 'k',
-            models: [{ id: 'm1', name: 'deepseek-chat', kind: 'text' }],
+            models: [{ id: 'm', name: 'deepseek-chat', kind: 'text',
+                request: { bodyByUse: { chat: { max_tokens: 12 } }, body: { stop: null } } }],
         }],
-        purposes: { chat: 'm1' },
-        groups: [{ purposes: ['judge'], body: { temperature: 0 } }],
+        purposes: { chat: 'm' },
+        groups: [{ purposes: ['chat'], body: { max_tokens: 7 } }],
     });
     const lr = parseImport(legacy);
-    check('judge 未绑定时不启用预设', lr.ok && lr.state.judgePreset === false, JSON.stringify(lr.state && lr.state.judgePreset));
-    check('该组按非标准分组原样保留', lr.state.extraGroups.length === 1, JSON.stringify(lr.state.extraGroups));
-    const lout = build(lr.state.providers, lr.state.purposes, lr.state.useBodies, lr.state.extraGroups,
-        { judgePreset: lr.state.judgePreset });
-    check('导出仍包含该 judge 组（不吞配置）',
-        lout.groups.some(g => JSON.stringify(g.purposes) === JSON.stringify(['judge'])),
-        JSON.stringify(lout.groups));
+    check('含 groups 的旧配置导入成功', lr.ok, JSON.stringify(lr.issues));
+    check('  models[].request 原样保留',
+        JSON.stringify(lr.state.providers[0].models[0].request)
+        === '{"bodyByUse":{"chat":{"max_tokens":12}},"body":{"stop":null}}',
+        JSON.stringify(lr.state.providers[0].models[0].request));
+    check('  state 里没有 groups', !('groups' in lr.state));
 }
 
 console.log(`\n===== ${pass} 通过 / ${fail} 失败 =====`);

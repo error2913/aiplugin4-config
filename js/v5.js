@@ -45,13 +45,48 @@ export function isEligibleKind(use, kind) {
     return k !== 'embed' && k !== 'gen' && k !== 'tts';
 }
 
+const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * 校验请求体里的 thinking 字段：只接受结构化对象（字符串会被 provider 422 拒绝）。
+ * 与插件 `schema.ts` 的 checkThinkingField 同一口径 —— 那边是运行时唯一权威。
+ */
+function checkThinkingField(path, body) {
+    if (!isPlainObject(body)) return null;
+    if (!Object.prototype.hasOwnProperty.call(body, 'thinking')) return null;
+    const value = body.thinking;
+    if (value === undefined || value === null) return null;
+    if (!isPlainObject(value)) {
+        return {
+            path: `${path}.thinking`,
+            msg: `thinking 需为结构化对象（如 {"type":"enabled"}），不能是 ${JSON.stringify(value)}`,
+        };
+    }
+    return null;
+}
+
+/**
+ * 某模型类型下可以配置「用途请求体」（`request.bodyByUse`）的用途。
+ *
+ * 规则与插件 `isEligibleKind` 一致，但**终端用途的模型不给入口**：
+ * 嵌入 / 生图 / 语音模型只做一件事，按用途覆盖请求体没有实际意义，
+ * 界面直接不显示该折叠（避免一个看不懂的空编辑器）。
+ *
+ * @returns {object[]} PURPOSES 的子集（保持 UI 顺序）；空数组 = 不显示入口
+ */
+export function bodyUsePurposesForKind(kind) {
+    const k = kind || 'text';
+    if (k === 'embed' || k === 'gen' || k === 'tts') return [];
+    return PURPOSES.filter(p => isEligibleKind(p.key, k));
+}
+
 /**
  * 校验**完整配置对象**，返回问题列表。
  * 每条 { path, msg }，path 用 $.providers[0].models[1].kind 形式（与插件报错格式一致）。
  *
  * 为什么需要它（而不只是 validate(providers, purposes)）：
- * 插件侧校验的是**最终 JSON**（含 version 与 groups），而 UI 状态里没有这两项
- * （groups 由 build() 派生）。若生成器只校验 UI 状态，两边对"合法性"的判定就会不一致 ——
+ * 插件侧校验的是**最终 JSON**（含 version），UI 状态里没有 version（由 build() 写死）。
+ * 若生成器只校验 UI 状态，两边对"合法性"的判定就可能不一致 ——
  * 用户按生成器说"没问题"去粘，插件却报错。联测（scripts/integration-config-generator.mjs）
  * 的第 B 组用例正是钉住这一点。
  */
@@ -123,6 +158,40 @@ export function validateConfig(cfg) {
             } else {
                 modelKinds.set(mid, m.kind || 'text');
             }
+
+            // ---- request（逐模型请求覆盖）----
+            // 与插件 schema.ts 同口径：request 是对象；其中 bodyByUse（用途 → 请求体）
+            // 的键必须是已知用途、值必须是对象；body.thinking 只接受结构化对象。
+            if (m.request !== undefined) {
+                if (!isPlainObject(m.request)) {
+                    push(`${mp}.request`, 'request 需为对象');
+                } else {
+                    const bbu = m.request.bodyByUse;
+                    if (bbu !== undefined) {
+                        if (!isPlainObject(bbu)) {
+                            push(`${mp}.request.bodyByUse`, 'bodyByUse 需为对象（用途 → 请求体）');
+                        } else {
+                            const kind = m.kind || 'text';
+                            for (const [use, body] of Object.entries(bbu)) {
+                                const upath = `${mp}.request.bodyByUse.${use}`;
+                                if (!PURPOSE_KEYS.includes(use)) {
+                                    push(upath, `未知用途（可选：${PURPOSE_KEYS.join(' / ')}）`);
+                                    continue;
+                                }
+                                if (!isPlainObject(body)) {
+                                    push(upath, '请求体需为对象');
+                                    continue;
+                                }
+                                const thinkingIssue = checkThinkingField(upath, body);
+                                if (thinkingIssue) push(thinkingIssue.path, thinkingIssue.msg);
+                                if (!isEligibleKind(use, kind)) {
+                                    push(upath, `模型类型是 ${kind}，不适用于「${use}」用途`);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         });
     });
 
@@ -155,36 +224,13 @@ export function validateConfig(cfg) {
         });
     }
 
-    // ---- groups（插件侧会校验，为保持一致这里也校验）----
-    if (cfg.groups !== undefined) {
-        if (!Array.isArray(cfg.groups)) {
-            push('$.groups', 'groups 需为数组');
-        } else {
-            cfg.groups.forEach((g, i) => {
-                const gp = `$.groups[${i}]`;
-                if (!g || typeof g !== 'object' || Array.isArray(g)) {
-                    push(gp, '用途组必须是对象');
-                    return;
-                }
-                if (!Array.isArray(g.purposes) || g.purposes.length === 0) {
-                    push(`${gp}.purposes`, '用途组需要非空的 purposes 数组');
-                    return;
-                }
-                g.purposes.forEach((u, j) => {
-                    if (!PURPOSE_KEYS.includes(u)) push(`${gp}.purposes[${j}]`, `未知用途 ${JSON.stringify(u)}`);
-                });
-            });
-        }
-    }
-
     return problems;
 }
 
 /**
  * 校验 UI 状态（providers + purposes）。
- * 等价于对"build() 会产出的那份配置"做一次完整校验 —— 但**不含 groups**，
- * 因为 UI 状态里没有 groups（由 build() 按绑定的用途派生），无从不一致。
- * 需要校验完整 JSON（含 version/groups）时用 validateConfig()。
+ * 等价于对"build() 会产出的那份配置"做一次完整校验 —— version 由这里补成 5。
+ * 需要校验一份**已存在的完整 JSON**（比如导入的内容）时用 validateConfig()。
  */
 export function validate(providers, purposes) {
     // 停用的连接不参与校验：它的字段错误/空 Key 不应阻止复制；
@@ -209,117 +255,15 @@ export function validate(providers, purposes) {
 }
 
 /**
- * 用途组的**默认请求体**（按用途分类，不是按 vendor）。
- *
- * 与插件的关系（重要）：
- *   插件有两套默认 —— `model_defaults.ts`（代码兜底，配置里没有 groups 时用）与
- *   出厂 `DEFAULT_V5_CONFIG` 的 groups（配置里写了的优先）。
- *   本表对齐的是**出厂配置那一套**（含 temperature/top_p），因为生成器的产出就是要写进配置的。
- *   联测 §G 会拿插件真实对象逐字段比对，防止这里悄悄漂移。
- *
- * 为什么按用途而不是按 vendor：识图/嵌入**没有** vendor 预设机制
- * （插件的 `MediaPresetUse` 只有 tts / image-generation），
- * 它们的结构由代码默认 + provider 协议转换决定，所以这里只能给通用结构。
- * 用户需要按 vendor 改，就用「请求体覆盖」编辑区。
- */
-export const DEFAULT_USE_BODIES = {
-    chat: { temperature: 1, top_p: 1, max_tokens: 8192, stop: null, stream: false },
-    'image-understanding': { temperature: 1, max_tokens: 2048, stop: null, stream: false },
-    'text-embedding': { encoding_format: 'float', dimensions: 1024 },
-};
-
-/**
- * 可选的「决策 / 评分请求体预设」（方案 §12.3）：**默认不启用**，开启时独立成组。
- *
- * 为什么独立成组而不是塞进 chat 组：插件按 groups[].purposes 给用途套 body，
- * 同一组里的用途共享一个 body —— judge 要 temperature 0 / 小 max_tokens /
- * json_object，和 chat 的 temperature 1 / 8192 直接冲突。
- *
- * 关于「按 vendor 关思考」：生成器**没有** vendor→思考开关的预设表（插件请求体机制里
- * 也没有现成的按 vendor 关思考映射），所以这里**不猜**厂商字段（DeepSeek 的
- * `thinking:{"type":"disabled"}`、Qwen 的 `enable_thinking` 等各家不同）。
- * 需要关思考时，用「用途组请求体（高级）」覆盖 judge 组 body 自行填（插件 v5 校验
- * 只要求 thinking 是结构化对象，不接受字符串）。
- */
-export const JUDGE_PRESET_BODY = {
-    temperature: 0,
-    max_tokens: 300,
-    response_format: { type: 'json_object' },
-};
-
-/** JUDGE_PRESET_BODY 的深拷贝（避免调用方改到共享常量） */
-function cloneJudgePresetBody() {
-    return JSON.parse(JSON.stringify(JUDGE_PRESET_BODY));
-}
-
-/** 用途组的分组方式：哪些用途共用一个 body（chat 系三个共享） */
-const GROUP_MEMBERS = {
-    chat: ['chat', 'summarization', 'judge'],
-    'image-understanding': ['image-understanding'],
-    'text-embedding': ['text-embedding'],
-};
-
-/**
- * 生成用途组。
- * @param {object} purposes 用途绑定
- * @param {object} [useBodies] 用途组 body 覆盖（键同 DEFAULT_USE_BODIES / 'judge'）；未给的用默认
- * @param {object[]} [extraGroups] 导入时保留下来的非标准分组（原样附在最后）
- * @param {{judgePreset?: boolean}} [options] 可选开关（默认全关，输出与旧版逐字节一致）
- *
- * judgePreset（方案 §12.3）：开启且**判定用途有绑定**时，把 judge 从对话系组里拆出来，
- * 独立成 `{purposes:['judge'], body:JUDGE_PRESET_BODY}`。判定没绑定时开关不生效 ——
- * 不产生"给不存在的用途写 body"的无用配置，也保证关闭时输出逐字节不变。
- */
-function defaultGroups(purposes, useBodies, extraGroups, options) {
-    const used = new Set(Object.keys(purposes || {}).filter(k => normalizePurposeList(purposes[k]).length > 0));
-    // 判定预设只在真的绑定了 judge 时生效（避免产出空 body 的 judge 组）
-    const judgePresetOn = !!(options && options.judgePreset === true) && used.has('judge');
-    // 被非标准分组覆盖的用途：不再由标准分组给 body，避免"同一个用途两个组"互相盖
-    const covered = new Set();
-    for (const g of extraGroups || []) {
-        for (const u of g.purposes || []) covered.add(u);
-    }
-    const out = [];
-    for (const [key, members] of Object.entries(GROUP_MEMBERS)) {
-        // judge 预设开启时，对话系组只保留 chat/summarization（judge 独立成组）
-        const effective = judgePresetOn && key === 'chat'
-            ? members.filter(u => u !== 'judge')
-            : members;
-        // 该族一个用途都没绑定 → 不产组（避免塞无用配置）
-        if (!effective.some(u => used.has(u))) continue;
-        // 该族**只要有一个**用途被非标准分组覆盖，就整族交给那些分组。
-        // 不能只剔除被覆盖的那个：那会造出一个**新的非标准分组**
-        // （如 [summarization,judge]），于是反复导入导出时分组不断增殖。
-        if (members.some(u => covered.has(u))) continue;
-        const override = useBodies && useBodies[key];
-        const body = override && typeof override === 'object' && !Array.isArray(override)
-            ? override
-            : DEFAULT_USE_BODIES[key];
-        out.push({ purposes: [...effective], body });
-    }
-    // judge 预设组：固定放在标准分组之后、导入保留分组之前（顺序稳定 → 往返不漂移）
-    if (judgePresetOn) {
-        const override = useBodies && useBodies.judge;
-        const body = override && typeof override === 'object' && !Array.isArray(override)
-            ? override
-            : cloneJudgePresetBody();
-        out.push({ purposes: ['judge'], body });
-    }
-    // 导入保留的分组按原顺序附后（顺序影响插件的合并优先级）
-    for (const g of extraGroups || []) out.push(g);
-    return out;
-}
-
-/**
  * 由 UI 状态构建 v5 配置对象。
  * 只输出有意义的字段（省略空值），保持配置紧凑。
  * @param {object[]} providers
  * @param {object} purposes
- * @param {object} [useBodies] 用途组 body 覆盖（见 DEFAULT_USE_BODIES / 'judge'）
- * @param {object[]} [extraGroups] 导入保留的非标准用途组
- * @param {{judgePreset?: boolean}} [options] 可选开关（默认全关 = 输出与旧版逐字节一致）
+ *
+ * 注意：**不输出 groups**（用途组的请求体机制已随插件移除）。请求体覆盖只走
+ * 逐模型的 `providers[].models[].request`（含 `bodyByUse`），`build()` 原样透传。
  */
-export function build(providers, purposes, useBodies, extraGroups, options) {
+export function build(providers, purposes) {
     const out = { version: 5 };
     // 停用的连接直接从生成配置里移除（不写 enabled 字段），绑定到它模型的用途也一并过滤
     const active = (providers || []).filter(p => p.enabled !== false);
@@ -354,9 +298,6 @@ export function build(providers, purposes, useBodies, extraGroups, options) {
         if (list.length) usedPurposes[k] = list;
     }
     if (Object.keys(usedPurposes).length) out.purposes = usedPurposes;
-
-    const groups = defaultGroups(usedPurposes, useBodies, extraGroups, options);
-    if (groups.length) out.groups = groups;
 
     return out;
 }
@@ -428,32 +369,22 @@ export function stripRemovedPurposes(purposes) {
     return out;
 }
 
-/** 判断两个用途数组是否为同一集合（忽略顺序） */
-function samePurposeSet(a, b) {
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-    const s = new Set(a);
-    return b.every(x => s.has(x));
-}
-
 /**
  * 把一份 v5 配置文本解析成**生成器的 UI 状态**（`build()` 的逆）。
  *
  * 与 build 的往返约定：
  *   - `providers[]` → 连接数组（`uid`/`templateId`/`mode` 由 app.js 补，属 UI 概念）
  *   - `purposes` → 用途绑定
- *   - `groups[]` → 命中已知分组的 body 进 `useBodies`；**其余原样留在 `extraGroups`**
- *   - 判定请求体预设（可选）：`purposes` 恰为 `['judge']` 的组 → `judgePreset=true` +
- *     `useBodies.judge`；开启预设时对话系组是 `['chat','summarization']`，其 body 还原到
- *     `useBodies.chat`。两条都识别才能保证「开启预设导出→导入→再导出」逐字节不漂移
- *   - `models[].request` / `bodyMode` / `contextWindow` / `maxTokens` 全部保留
+ *   - `models[].request`（含 `bodyByUse`）/ `bodyMode` / `contextWindow` / `maxTokens` **原样保留**
+ *   - `groups[]` → **已停用**：丢弃并给出一条明确警告（请求体覆盖改走 models[].request.bodyByUse）
  *
  * 旧配置兼容：已移除的用途（见 `REMOVED_PURPOSES`，目前是 compression）会在
  * **校验之前**被清洗掉并给出警告 —— 否则旧导出会被判"未知用途"而整份导入失败。
  *
- * 为什么要有 `extraGroups`：本工具只认三种固定分组（对话系/识图/嵌入），
- * 手写配置可能有别的分组方式。丢掉它们等于**静默改坏用户配置**，所以原样保留并**明确警告**。
+ * 返回的 state **只含 providers / purposes**：uid、templateId、mode 等是纯 UI 概念，
+ * 由 app.js 的 applyImportedState() 补。旧草稿里的 useBodies / judgePreset 也不再表达。
  *
- * @returns {{ok:boolean, state?:object, issues:Array, warnings:string[]}}
+ * @returns {{ok:boolean, state?:{providers:object[], purposes:object}, issues:Array, warnings:string[]}}
  */
 export function parseImport(text) {
     const warnings = [];
@@ -468,30 +399,32 @@ export function parseImport(text) {
     }
 
     // ---- 旧配置清洗（**必须在 validateConfig 之前**）----
-    // compression 用途已随插件 v5 方案彻底移除。旧导出/手写配置里还带着它时，
-    // 直接校验会被判"未知用途"→ 整份导入失败（用户看到的是"我的配置突然坏了"）。
-    // 所以先剔除再校验，并明确告知改了什么（不静默改用户数据）。
-    let strippedLegacy = false;
     if (cfg && typeof cfg === 'object' && !Array.isArray(cfg)) {
+        // 1) 已移除的用途（compression）：旧导出/手写配置里还带着它时，直接校验会被判
+        //    "未知用途"→ 整份导入失败。先剔除再校验，并明确告知改了什么（不静默改用户数据）。
+        let strippedLegacy = false;
         if (cfg.purposes && typeof cfg.purposes === 'object' && !Array.isArray(cfg.purposes)) {
             const cleaned = stripRemovedPurposes(cfg.purposes);
             if (Object.keys(cleaned).length !== Object.keys(cfg.purposes).length) strippedLegacy = true;
             cfg.purposes = cleaned;
         }
-        if (Array.isArray(cfg.groups)) {
-            const keptGroups = [];
-            for (const g of cfg.groups) {
-                if (!g || typeof g !== 'object' || !Array.isArray(g.purposes)) { keptGroups.push(g); continue; }
-                const filtered = g.purposes.filter(u => !REMOVED_PURPOSES.includes(u));
-                if (filtered.length !== g.purposes.length) strippedLegacy = true;
-                // 过滤后为空的组直接删除（插件侧也不接受空 purposes 的组）
-                if (filtered.length === 0) continue;
-                keptGroups.push({ ...g, purposes: filtered });
+        if (strippedLegacy) warnings.push('旧配置中的「压缩」用途已移除，已自动忽略。');
+
+        // 2) 用途组（groups）已停用：插件侧删掉了这套机制，请求体覆盖改走
+        //    `models[].request.bodyByUse`。丢掉输入里的 groups 并明确警告 ——
+        //    既不静默吞用户数据，也不让它把整份导入判成非法。
+        if ('groups' in cfg) {
+            const groups = cfg.groups;
+            const hadContent = Array.isArray(groups) ? groups.length > 0 : !!groups;
+            if (hadContent) {
+                warnings.push('旧配置的用途组请求体（groups）已停用，已忽略；请改用每个模型的「用途请求体」（models[].request.bodyByUse）。');
             }
-            cfg.groups = keptGroups;
+            delete cfg.groups;
         }
+        // 3) 旧 UI 草稿键不是 v5 配置字段（手写/旧版可能带进来）—— 忽略即可
+        delete cfg.useBodies;
+        delete cfg.judgePreset;
     }
-    if (strippedLegacy) warnings.push('旧配置中的「压缩」用途已移除，已自动忽略。');
 
     // 与插件同口径校验（validateConfig 已包含 version 检查）
     const issues = validateConfig(cfg);
@@ -527,6 +460,8 @@ export function parseImport(text) {
                 if (m.kind) o.kind = m.kind;
                 if (m.contextWindow) o.contextWindow = m.contextWindow;
                 if (m.maxTokens) o.maxTokens = m.maxTokens;
+                // 逐模型 request 原样保留（含 bodyByUse）：不做任何解析/重组，
+                // 否则「导入→导出」会与原文漂移。
                 if (m.request && Object.keys(m.request).length) o.request = m.request;
                 if (m.bodyMode) o.bodyMode = m.bodyMode;
                 return o;
@@ -545,56 +480,5 @@ export function parseImport(text) {
         if (list.length) purposes[k] = list;
     }
 
-    // 判定请求体预设（§12.3，可选、默认不启用）：识别 purposes 恰为 ['judge'] 的独立组。
-    // 仅当判定用途真的绑定了模型时才认（否则按普通非标准组原样保留，不吞用户配置）。
-    const judgePreset = !!purposes.judge
-        && (cfg.groups || []).some(g => samePurposeSet(g.purposes, ['judge']));
-
-    const useBodies = {};
-    const extraGroups = [];
-    for (const g of cfg.groups || []) {
-        // judge 预设组：独立识别（不落 extraGroups，否则「导入→导出」会漂移）
-        if (judgePreset && samePurposeSet(g.purposes, ['judge'])) {
-            if (g.body && Object.keys(g.body).length) useBodies.judge = g.body;
-            continue;
-        }
-        // 预设开启时对话系组是 ['chat','summarization']（judge 已拆出）：识别它的 body
-        if (judgePreset && samePurposeSet(g.purposes, ['chat', 'summarization'])) {
-            if (g.body && Object.keys(g.body).length) useBodies.chat = g.body;
-            continue;
-        }
-        const hit = Object.entries(GROUP_MEMBERS).find(([, members]) => samePurposeSet(members, g.purposes));
-        if (hit && g.body && Object.keys(g.body).length) {
-            useBodies[hit[0]] = g.body;
-        } else if (hit) {
-            // 命中已知分组但没写 body → 用内置默认即可，不必记
-        } else {
-            // 认不出的分组：原样保留，导出时按原顺序附在标准分组之后
-            extraGroups.push(g);
-        }
-    }
-    if (extraGroups.length) {
-        warnings.push(
-            `配置里有 ${extraGroups.length} 个用途组的用途组合不是本工具的标准分组（对话系 / 识图 / 嵌入），`
-            + `已**原样保留**并在导出时附在标准分组之后。注意：分组顺序会影响插件的合并优先级，`
-            + `如需精确控制请直接改 JSON。`,
-        );
-    }
-    // 绑定了用途但没有任何分组给它 body → 导出时会补内置默认，说一声免得用户以为导入丢了
-    const boundUses = new Set(Object.keys(purposes));
-    const groupedUses = new Set();
-    for (const g of cfg.groups || []) {
-        for (const u of g.purposes || []) groupedUses.add(u);
-    }
-    for (const [key, members] of Object.entries(GROUP_MEMBERS)) {
-        // 只算"绑定了但没被任何分组覆盖"的用途 —— 被非标准分组覆盖的不算缺
-        const ungrouped = members.filter(u => boundUses.has(u) && !groupedUses.has(u));
-        if (ungrouped.length) {
-            warnings.push(
-                `「${key}」在配置里没有对应 body，导出时会补上内置默认值（涉及：${ungrouped.join('、')}）。`,
-            );
-        }
-    }
-
-    return { ok: true, state: { providers, purposes, useBodies, extraGroups, judgePreset }, issues: [], warnings };
+    return { ok: true, state: { providers, purposes }, issues: [], warnings };
 }

@@ -41,8 +41,6 @@ const SEED = {
         },
     ],
     purposes: {},
-    useBodies: {},
-    extraGroups: [],
 };
 
 (async () => {
@@ -61,7 +59,11 @@ const SEED = {
         const blockOf = (re) => qa('.purpose-block')
             .find((b) => re.test(b.querySelector('.purpose-label').textContent));
 
-        check('每个用途一个卡片块', qa('.purpose-block').length === 8, String(qa('.purpose-block').length));
+        // 7 个用途（compression 已移除）→ 7 个块，每个块一个用途
+        check('每个用途一个卡片块', qa('.purpose-block').length === 7, String(qa('.purpose-block').length));
+        check('judge 用途标签是「评分」',
+            qa('.purpose-label').some((e) => e.textContent === '评分'),
+            JSON.stringify(qa('.purpose-label').map((e) => e.textContent)));
         check('不再有下拉菜单（用途绑定已改卡片列表）', qa('.purpose-row').length === 0);
         check('每块都有标题与顺序摘要',
             qa('.purpose-block').every((b) => b.querySelector('.purpose-label') && b.querySelector('.purpose-order')));

@@ -50,7 +50,11 @@ f.onload = async () => {
         check('初始出厂示例是 deepseek', /deepseek/.test(preview()), preview().slice(0, 80));
         check('初始无 API Key → 显示校验错误', !d.getElementById('validationBox').hidden);
         check('校验错误阻断复制', d.getElementById('copyBtn').disabled);
-        check('初始用途绑定已渲染', qa('.purpose-block').length === 8, qa('.purpose-block').length);
+        check('初始用途绑定已渲染（7 个用途，compression 已移除）',
+            qa('.purpose-block').length === 7, qa('.purpose-block').length);
+        check('judge 用途标签是「评分」',
+            qa('.purpose-label').some(e => e.textContent === '评分'),
+            JSON.stringify(qa('.purpose-label').map(e => e.textContent)));
 
         // ---------- 用途绑定：卡片列表 + 取用顺序角标 ----------
         {
@@ -215,8 +219,13 @@ f.onload = async () => {
             d.querySelector('.pcard .btn-edit').click();
             await sleep(80);
 
-            // 编辑区是 .sel-row 的**兄弟**（挂在 .selected-list 下），不是它的子元素
-            const editors = pqa('.selected-list > .json-editor');
+            // 编辑区是 .sel-row 的**兄弟**（挂在 .selected-list 下），不是它的子元素。
+            // 注意 .selected-list 下还有逐模型的「用途请求体」（也是 .json-editor），
+            // 所以必须按 summary 前缀区分，不能只按 class 数。
+            const editors = pqa('.selected-list > .json-editor').filter((e) => {
+                const s = e.querySelector(':scope > summary');
+                return s && s.textContent.startsWith('请求与响应格式');
+            });
             // 用"每个已选模型一个编辑区"这个**不变量**，不写死数字
             // （出厂默认的模型数会变，写死就会在别处默默失配）
             const rowCount = pqa('.sel-row').length;
@@ -398,34 +407,146 @@ f.onload = async () => {
             await sleep(80);
         }
 
-        // ---------- 用途组「请求体覆盖」（折叠） ----------
+        // ---------- 逐模型「用途请求体」（models[].request.bodyByUse） ----------
+        //
+        // 旧版是主界面「用途组请求体（高级）」写 groups[].body；插件删掉 groups 后改为
+        // 逐模型 request.bodyByUse。这里走真实 UI：默认 0 条、添加预填、同用途只能一条、
+        // 输入不重建（复用 jsonEditor），清空后 bodyByUse/request 整个消失。
         {
-            const gb = qa('.group-bodies');
-            check('存在「用途组请求体」折叠区', gb.length === 1, String(gb.length));
-            check('「用途组请求体」默认折叠', gb[0] && !gb[0].open);
-            check('标签为「用途组请求体（高级）」',
-                gb[0] && gb[0].querySelector('summary').textContent === '用途组请求体（高级）',
-                gb[0] ? gb[0].querySelector('summary').textContent : '');
-            // 只给有绑定的用途组显示编辑器（默认只绑了 chat 系四个 → 1 个）
-            check('只为已绑定的用途组提供编辑器',
-                gb[0] ? gb[0].querySelectorAll('.json-editor').length === 1
-                      : false,
-                gb[0] ? String(gb[0].querySelectorAll('.json-editor').length) : '');
-            check('默认不写 useBodies（用内置默认）', !/"useBodies"/.test(preview()));
+            d.querySelector('.pcard .btn-edit').click();
+            await sleep(100);
+            const editors = () => pqa('.selected-list > .use-body-editor');
+            const modelRows = () => pqa('.selected-list > .sel-row');
+            check('每个 text / vision 模型都有「用途请求体」折叠',
+                editors().length === modelRows().length && modelRows().length > 0,
+                editors().length + ' vs ' + modelRows().length);
+            check('默认折叠', editors().every(e => !e.open), JSON.stringify(editors().map(e => e.open)));
+            check('标签以「用途请求体（可添加多条）」开头',
+                editors().every(e => (e.querySelector(':scope > summary') || {}).textContent
+                    && e.querySelector(':scope > summary').textContent.startsWith('用途请求体（可添加多条）')),
+                editors().map(e => (e.querySelector(':scope > summary') || {}).textContent).join(' | '));
+            check('默认 0 条：没有任何行', pqa('.use-body-row').length === 0, String(pqa('.use-body-row').length));
+            const cfgDefault = JSON.parse(preview());
+            check('默认不写 bodyByUse / request',
+                cfgDefault.providers[0].models.every(m => !('request' in m)),
+                JSON.stringify(cfgDefault.providers[0].models));
 
-            // 改 chat 组 body
-            gb[0].open = true;
-            await sleep(40);
-            const gta = gb[0].querySelector('textarea');
-            gta.value = '{"max_tokens":321}';
-            gta.dispatchEvent(new w.Event('input', { bubbles: true }));
-            await sleep(40);
-            check('用途组 body 覆盖写进 groups',
-                /"groups":\[\{"purposes":\["chat","summarization","judge"\],"body":\{"max_tokens":321\}\}\]/.test(preview()),
+            // 行的后续兄弟里找 .use-body-editor（顺序：行 → 请求与响应格式 → bodyMode → 用途请求体）
+            const useEdOf = (modelName) => {
+                const row = modelRows().find(r => r.querySelector('.sel-name').textContent === modelName);
+                if (!row) return null;
+                let n = row.nextElementSibling;
+                while (n && !n.classList.contains('use-body-editor')) n = n.nextElementSibling;
+                return n;
+            };
+            const flashEd = useEdOf('deepseek-flash');
+            check('找到 deepseek-flash 的「用途请求体」', !!flashEd);
+
+            // ---- 添加一条：默认用途 = 第一个未占用且合法的（chat），body 预填
+            flashEd.open = true;
+            flashEd.querySelector('.use-body-actions .btn').click();
+            await sleep(60);
+            check('添加后出现 1 行', flashEd.querySelectorAll('.use-body-row').length === 1,
+                String(flashEd.querySelectorAll('.use-body-row').length));
+            const row1 = flashEd.querySelector('.use-body-row');
+            check('默认用途选 chat', row1.querySelector('select').value === 'chat',
+                row1.querySelector('select').value);
+            check('body 预填 max_tokens=65536 / temperature=1',
+                /"max_tokens": ?65536/.test(row1.querySelector('textarea').value)
+                && /"temperature": ?1/.test(row1.querySelector('textarea').value),
+                row1.querySelector('textarea').value);
+            check('写进 request.bodyByUse.chat',
+                /"bodyByUse":{"chat":{"max_tokens":65536,"temperature":1}}/.test(preview()),
                 preview().slice(0, 400));
-            check('覆盖后配置仍合法',
-                d.getElementById('copyBtn').disabled === false,
+            check('覆盖后配置仍合法', d.getElementById('copyBtn').disabled === false,
                 d.getElementById('validationBox').textContent);
+
+            // ---- 输入请求体时**不重建**（复用 jsonEditor，焦点不能丢）
+            const ta = row1.querySelector('textarea');
+            ta.focus();
+            ta.value = '{"max_tokens":321,"temperature":1}';
+            ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(60);
+            check('输入后 textarea 未被重建', flashEd.querySelector('.use-body-row textarea') === ta);
+            check('输入后仍保持焦点', d.activeElement === ta, d.activeElement && d.activeElement.tagName);
+            check('输入内容写进 bodyByUse.chat',
+                /"bodyByUse":{"chat":{"max_tokens":321/.test(preview()), preview().slice(0, 400));
+
+            // ---- 非法 JSON：就地报错、不写回（保留上一次合法值）
+            ta.value = '{"max_tokens":';
+            ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(40);
+            check('非法 JSON 就地报错', !row1.querySelector('.json-err').hidden,
+                row1.querySelector('.json-err').textContent);
+            check('非法 JSON 不写回', /"max_tokens":321/.test(preview()), preview().slice(0, 400));
+            ta.value = '{"max_tokens":321,"temperature":1}';
+            ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(40);
+
+            // ---- 再添加一条：自动选下一个未占用用途，下拉里不再有 chat（同用途只能一条）
+            flashEd.querySelector('.use-body-actions .btn').click();
+            await sleep(60);
+            const rows = [...flashEd.querySelectorAll('.use-body-row')];
+            check('添加后出现 2 行', rows.length === 2, String(rows.length));
+            const second = rows[1];
+            check('第二条默认用途是 summarization', second.querySelector('select').value === 'summarization',
+                second.querySelector('select').value);
+            check('已占用的用途不在下拉里',
+                ![...second.querySelectorAll('option')].some(o => o.value === 'chat'),
+                JSON.stringify([...second.querySelectorAll('option')].map(o => o.value)));
+            const bbu2rows = JSON.parse(preview()).providers[0].models[0].request.bodyByUse;
+            check('两条都写进 bodyByUse',
+                !!bbu2rows.chat && !!bbu2rows.summarization, JSON.stringify(bbu2rows));
+
+            // ---- 删除一条 → 只删它
+            second.querySelector('.btn-danger').click();
+            await sleep(60);
+            check('删除一条后剩 1 行', flashEd.querySelectorAll('.use-body-row').length === 1,
+                String(flashEd.querySelectorAll('.use-body-row').length));
+            const bbuAfterDel = JSON.parse(preview()).providers[0].models[0].request.bodyByUse;
+            check('删除的是 summarization（bodyByUse 里只剩 chat）',
+                !('summarization' in bbuAfterDel) && !!bbuAfterDel.chat, JSON.stringify(bbuAfterDel));
+            check('purposes 绑定不受影响（summarization 仍绑着 flash）',
+                JSON.stringify(JSON.parse(preview()).purposes.summarization) === '["flash"]',
+                JSON.stringify(JSON.parse(preview()).purposes));
+
+            // ---- 清空请求体 → 键删除；bodyByUse 空 → request 整个删掉
+            const ta2 = flashEd.querySelector('.use-body-row textarea');
+            ta2.value = '';
+            ta2.dispatchEvent(new w.Event('input', { bubbles: true }));
+            await sleep(60);
+            const cfgCleared = JSON.parse(preview());
+            check('清空后 bodyByUse 与 request 都消失',
+                !('request' in cfgCleared.providers[0].models[0]),
+                JSON.stringify(cfgCleared.providers[0].models[0]));
+
+            // ---- 删掉最后一条 → 回到 0 条
+            flashEd.querySelector('.use-body-row .btn-danger').click();
+            await sleep(60);
+            check('删完回到 0 条', flashEd.querySelectorAll('.use-body-row').length === 0);
+
+            // ---- embed / gen / tts 不提供入口：sd3-large 自动判 gen
+            const mIn2 = pq('.models-input input');
+            mIn2.value = 'sd3-large';
+            pq('.models-input .btn').click();
+            await sleep(120);
+            check('生图模型不显示用途请求体入口',
+                editors().length === modelRows().length - 1,
+                editors().length + ' vs ' + (modelRows().length - 1));
+            // 改成 text → 入口出现（kind 变化会重建面板）
+            const sdRow = modelRows().find(r => /sd3-large/.test(r.querySelector('.sel-name').textContent));
+            const sdKind = sdRow.querySelector('select');
+            sdKind.value = 'text';
+            sdKind.dispatchEvent(new w.Event('change', { bubbles: true }));
+            await sleep(120);
+            check('改成 text 后入口出现', editors().length === modelRows().length,
+                editors().length + ' vs ' + modelRows().length);
+            // 清理：删掉刚加的模型（不保存）
+            const sdRow2 = modelRows().find(r => /sd3-large/.test(r.querySelector('.sel-name').textContent));
+            sdRow2.querySelector('.btn-danger').click();
+            await sleep(120);
+            d.getElementById('panelCancel').click();
+            await sleep(80);
         }
 
         // ---------- 供应商用途支持标注 ----------
@@ -762,11 +883,13 @@ f.onload = async () => {
                     api: 'anthropic-messages', baseURL: 'https://api.anthropic.com/v1', apiKey: 'sk-imported',
                     displayName: '导入来的', provider: 'anthropic',
                     models: [
-                        { id: 'sonnet', name: 'claude-sonnet-4-5', kind: 'vision' },
+                        { id: 'sonnet', name: 'claude-sonnet-4-5', kind: 'vision',
+                          request: { bodyByUse: { judge: { temperature: 0, max_tokens: 300 } } } },
                         { id: 'flux', name: 'flux-1', kind: 'gen', request: { body: { prompt: '{prompt}' } }, bodyMode: 'replace' },
                     ],
                 }],
                 purposes: { 'image-understanding': 'sonnet', 'image-generation': 'flux' },
+                // 旧配置里的 groups 现在会被丢弃 + 警告（插件已删除用途组机制）
                 groups: [{ purposes: ['image-understanding'], body: { max_tokens: 111 } }],
             });
             d.getElementById('importConfirm').click();
@@ -787,6 +910,10 @@ f.onload = async () => {
                 cfg.providers[0].models[1].bodyMode === 'replace'
                 && cfg.providers[0].models[1].request.body.prompt === '{prompt}',
                 JSON.stringify(cfg.providers[0].models[1]));
+            check('导入保留逐模型 bodyByUse（原样）',
+                JSON.stringify(cfg.providers[0].models[0].request.bodyByUse)
+                === '{"judge":{"temperature":0,"max_tokens":300}}',
+                JSON.stringify(cfg.providers[0].models[0].request));
             // 导入的是**单字符串**写法（手写配置常见）→ 归一为单元素数组。
             // 这个归一是有意的：UI 状态统一用数组，插件侧也只处理一种形状。
             check('导入保留 purposes（单字符串归一为数组）',
@@ -795,10 +922,12 @@ f.onload = async () => {
                 && Array.isArray(cfg.purposes['image-generation'])
                 && cfg.purposes['image-generation'][0] === 'flux',
                 JSON.stringify(cfg.purposes));
-            check('导入还原用途组 body',
-                (cfg.groups || []).some(g => g.purposes.includes('image-understanding')
-                    && g.body.max_tokens === 111),
+            check('旧 groups 被丢弃（导出不含 groups）', cfg.groups === undefined,
                 JSON.stringify(cfg.groups));
+            check('丢弃旧 groups 有明确警告',
+                !d.getElementById('validationBox').hidden
+                && /用途组请求体/.test(d.getElementById('validationBox').textContent),
+                d.getElementById('validationBox').textContent);
 
             check('连接卡片按导入结果重建', qa('.pcard').length === 2,
                 qa('.pcard').length + '（1 连接 + 1 添加卡）');
@@ -821,7 +950,7 @@ f.onload = async () => {
             await sleep(50);
             check('点遮罩关闭导入面板', d.getElementById('importPanel').hidden);
 
-            // 6) 非标准分组：导入成功但有警告
+            // 6) 旧配置的 groups 已停用：导入成功 + 警告，导出不再有 groups
             d.getElementById('importBtn').click();
             await sleep(50);
             d.getElementById('importText').value = JSON.stringify({
@@ -835,14 +964,13 @@ f.onload = async () => {
             });
             d.getElementById('importConfirm').click();
             await sleep(120);
-            check('非标准分组也导入成功', d.getElementById('importPanel').hidden);
-            check('非标准分组给出警告', !d.getElementById('validationBox').hidden
-                && /原样保留/.test(d.getElementById('validationBox').textContent),
+            check('含旧 groups 的配置也能导入', d.getElementById('importPanel').hidden);
+            check('给出「已停用」警告', !d.getElementById('validationBox').hidden
+                && /用途组请求体/.test(d.getElementById('validationBox').textContent)
+                && /已停用/.test(d.getElementById('validationBox').textContent),
                 d.getElementById('validationBox').textContent);
             const cfg2 = JSON.parse(preview());
-            check('非标准分组原样保留在导出里',
-                JSON.stringify(cfg2.groups) === '[{"purposes":["chat"],"body":{"max_tokens":7}}]',
-                JSON.stringify(cfg2.groups));
+            check('导出里不再有 groups', cfg2.groups === undefined, JSON.stringify(cfg2.groups));
         }
 
             // 7) 含 null 的数值字段：导入必须原样保留（不擅自改用户数据），
@@ -875,7 +1003,12 @@ f.onload = async () => {
             // 打开面板看该字段的呈现：null 应显示为空，而不是字符串 "null"
             d.querySelector('.pcard .btn-edit').click();
             await sleep(150);
-            const edN = [...d.querySelectorAll('#panelBody .selected-list > .json-editor')].pop();
+            const edN = [...d.querySelectorAll('#panelBody .selected-list > .json-editor')]
+                .filter((e) => {
+                    const s = e.querySelector(':scope > summary');
+                    return s && s.textContent.startsWith('请求与响应格式');
+                })
+                .pop();
             edN.open = true;
             await sleep(80);
             const respEdN = [...edN.querySelectorAll('.json-editor')].find((e) => {
@@ -931,9 +1064,9 @@ f.onload = async () => {
 
             // 界面上也要对得上：卡片角标、模型行。
             // 注意用 qa（全页）而不是 pqa —— pqa 是 #panelBody 作用域，而用途卡片在左栏。
-            check('  用途卡片渲染出 4 个已绑定',
-                qa('.purpose-chip.picked').length === 4, String(qa('.purpose-chip.picked').length));
-            check('  4 个角标都是 1（各用途只绑一个）',
+            check('  用途卡片渲染出 3 个已绑定（chat / summarization / judge）',
+                qa('.purpose-chip.picked').length === 3, String(qa('.purpose-chip.picked').length));
+            check('  3 个角标都是 1（各用途只绑一个）',
                 qa('.purpose-chip.picked').every(c => c.querySelector('.rank-badge').textContent === '1'),
                 JSON.stringify(qa('.purpose-chip.picked').map(c => c.querySelector('.rank-badge').textContent)));
             // 连接卡片显示模型数

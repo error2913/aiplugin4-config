@@ -9,7 +9,7 @@ import { decideKind } from './classify.js';
 import {
     validate, build, serialize, serializePretty, maskKeys, parseImport,
     uniqueModelId, collectModelIds, isEligibleKind, normalizePurposeList,
-    stripRemovedPurposes, JUDGE_PRESET_BODY,
+    stripRemovedPurposes, bodyUsePurposesForKind,
 } from './v5.js';
 import { fetchModelList, FetchError, sortModelEntries } from './fetch-models.js';
 import { apiKeyInput, openImportDialog, pickFiles, readFileText } from './ui.js';
@@ -24,12 +24,6 @@ const nextUid = () => `u${++uid}`;
 let state = {
     providers: [],
     purposes: {},
-    /** 用途组 body 覆盖（键同 v5.js 的 DEFAULT_USE_BODIES）；空 = 用内置默认 */
-    useBodies: {},
-    /** 导入时保留下来的非标准用途组（原样导出；见 v5.js 的 parseImport） */
-    extraGroups: [],
-    /** 可选的判定请求体预设（§12.3）；默认关闭 = 输出与旧版逐字节一致 */
-    judgePreset: false,
 };
 
 /** 编辑面板的草稿（与 state 隔离，取消即丢弃） */
@@ -55,9 +49,6 @@ function scheduleSave() {
             localStorage.setItem(STORAGE_KEY, JSON.stringify({
                 providers: state.providers,
                 purposes: state.purposes,
-                useBodies: state.useBodies || {},
-                extraGroups: state.extraGroups || [],
-                judgePreset: state.judgePreset === true,
             }));
         } catch (e) {
             // 以前这里是空 catch —— 存储被禁（无痕/站点权限）或写满时**静默失败**，
@@ -96,11 +87,8 @@ function loadDraft() {
             purposes: stripRemovedPurposes(
                 d.purposes && typeof d.purposes === 'object' ? d.purposes : {},
             ),
-            // 旧存档没有这个键 → 兜底成 {}（否则 renderPurposes 读 state.useBodies[key] 会抛）
-            useBodies: d.useBodies && typeof d.useBodies === 'object' ? d.useBodies : {},
-            extraGroups: Array.isArray(d.extraGroups) ? d.extraGroups : [],
-            // 旧存档没有这个键 → 默认关闭（关闭时输出逐字节与旧版一致）
-            judgePreset: d.judgePreset === true,
+            // 旧草稿里的 useBodies / extraGroups / judgePreset 是已停用的「用途组请求体」机制，
+            // 直接丢掉（请求体覆盖改走逐模型的 request.bodyByUse，数据本来就在 models[] 里）。
         };
     } catch { return null; }
 }
@@ -309,11 +297,9 @@ function closePanel() {
 
 function savePanel() {
     if (!draft) return;
-    const {
-        uid, isNew, index, baseUrlTouched, lastVendorTemplateId,
-        fetched, fetchMsg, fetchKind, fetching,
-        ...conn
-    } = draft;
+    const { uid, isNew, index } = draft;
+    // stripDraft 顺带剥掉 `__useRows`（「用途请求体」的行清单是纯 UI 状态，不进配置）
+    const conn = stripDraft(draft);
 
     // 模型 id 若被改名，同步更新引用了它的用途绑定
     const oldModels = !isNew ? state.providers[index].models.map(m => m.id) : [];
@@ -734,7 +720,9 @@ function renderModelPicker() {
                 kSel.appendChild(o);
             }
             kSel.value = m.kind || '';
-            kSel.onchange = () => { m.kind = kSel.value || undefined; };
+            // kind 决定「用途请求体」里可选的用途（见 bodyUsePurposesForKind），所以类型一变
+            // 就要重建面板让那一段跟着出现/消失。改下拉是**离散操作**，重建不会像逐字输入那样丢焦点。
+            kSel.onchange = () => { m.kind = kSel.value || undefined; renderPanel(); };
             row.appendChild(kSel);
 
             const rm = el('button', 'btn btn-sm btn-danger');
@@ -845,6 +833,11 @@ function renderModelPicker() {
 
             syncMode();
             sel.appendChild(modeWrap);
+
+            // 逐模型「用途请求体」（折叠）。放在请求编辑区**之后**：
+            // 前面的定位逻辑用"行的下一个兄弟 = 请求与响应格式编辑区"，别插在它前面。
+            const bodyUse = useBodyEditor(m);
+            if (bodyUse) sel.appendChild(bodyUse);
         });
         wrap.appendChild(sel);
     }
@@ -919,32 +912,6 @@ function buildPurposesInto(wrap) {
     const intro = el('div', 'field-note purpose-intro');
     intro.textContent = '点卡片绑定，角标是取用顺序：先用 1，失败时顺着 2、3… 往后切。再点一次取消。';
     wrap.appendChild(intro);
-
-    // ---- 判定请求体预设（§12.3，默认关闭）
-    // 关闭时 build() 输出与旧版逐字节一致；开启且判定用途有绑定时，judge 从对话系组拆出、
-    // 独立成组（temperature 0 / max_tokens 300 / json_object），不再与 chat 的 body 冲突。
-    const presetWrap = el('div', 'purpose-preset');
-    const presetToggle = el('label', 'toggle');
-    const presetCb = el('input');
-    presetCb.type = 'checkbox';
-    presetCb.checked = state.judgePreset === true;
-    presetCb.title = '默认关闭。开启后若「评分 / 决策（判定）」绑定过模型，会在 groups[] 追加一个独立的 judge 用途组';
-    presetCb.addEventListener('change', () => {
-        state.judgePreset = presetCb.checked;
-        scheduleSave();
-        // 只重建用途区 + 输出：整面板重建会丢焦点
-        renderPurposesOnly();
-        renderOutput();
-    });
-    presetToggle.append(presetCb, document.createTextNode('判定请求体预设（默认关闭）'));
-    presetWrap.appendChild(presetToggle);
-    const presetNote = el('div', 'field-note');
-    presetNote.textContent = state.judgePreset
-        ? `已开启：「评分 / 决策（判定）」绑定模型后会追加 groups[] = {"purposes":["judge"],"body":${JSON.stringify(JUDGE_PRESET_BODY)}}。`
-        : '关闭时输出与旧版完全一致。开启后「评分 / 决策（判定）」独立成组：temperature 0、max_tokens 300、response_format={"type":"json_object"}；'
-            + '不按 vendor 猜「关思考」字段（插件请求体机制没有 vendor→思考开关预设，需要时在下方「用途组请求体」里自填 body.thinking 等）。';
-    presetWrap.appendChild(presetNote);
-    wrap.appendChild(presetWrap);
 
     for (const pu of PURPOSES) {
         // 只列该用途接受的 kind（对应插件 isEligible；否则会绑出一个插件运行时忽略的组合）
@@ -1027,52 +994,6 @@ function buildPurposesInto(wrap) {
         block.appendChild(cards);
         wrap.appendChild(block);
     }
-
-    // ---- 请求体覆盖（折叠）
-    // 用途组的 body 原先由 v5.js 写死、界面上改不了；这里给出覆盖入口。
-    // 只在真有绑定的用途组上出现（没绑就没有对应的 groups 项，改了也没用）。
-    const useBodies = state.useBodies || {};   // 旧存档/外部赋值可能没有这个键
-    const boundKeys = new Set(Object.keys(state.purposes).filter(k => normalizePurposeList(state.purposes[k]).length > 0));
-    // 预设开启时 judge 已拆出对话系组，这里也要跟着分成两个编辑区（否则改了 judge body 不生效）
-    const judgePresetOn = state.judgePreset === true;
-    const groupDefs = [
-        {
-            key: 'chat',
-            members: judgePresetOn ? ['chat', 'summarization'] : ['chat', 'summarization', 'judge'],
-            label: judgePresetOn ? '对话 / 总结' : '对话 / 总结 / 评分·决策（判定）',
-        },
-        { key: 'image-understanding', members: ['image-understanding'], label: '识图' },
-        { key: 'text-embedding', members: ['text-embedding'], label: '向量记忆（嵌入）' },
-    ];
-    if (judgePresetOn) groupDefs.push({ key: 'judge', members: ['judge'], label: '判定（评分 / 决策）' });
-    const groupKeys = groupDefs.filter(g => g.members.some(u => boundKeys.has(u)));
-
-    if (groupKeys.length) {
-        const outer = el('details', 'json-editor group-bodies');
-        const osum = document.createElement('summary');
-        osum.textContent = '用途组请求体（高级）';
-        outer.appendChild(osum);
-        const obody = el('div', 'json-editor-body');
-        const onote = el('div', 'field-note');
-        onote.textContent = '写进 groups[].body，是该用途组每次请求都带的字段。留空 = 用内置默认。';
-        obody.appendChild(onote);
-
-        for (const g of groupKeys) {
-            obody.appendChild(jsonEditor({
-                label: g.label,
-                value: useBodies[g.key],
-                rows: 5,
-                onCommit: (v) => {
-                    if (!state.useBodies) state.useBodies = {};
-                    if (v) state.useBodies[g.key] = v; else delete state.useBodies[g.key];
-                    scheduleSave();
-                    renderOutput();
-                },
-            }));
-        }
-        outer.appendChild(obody);
-        wrap.appendChild(outer);
-    }
 }
 
 /**
@@ -1122,6 +1043,14 @@ function stripDraft(d) {
         fetched, fetchMsg, fetchKind, fetching,
         ...conn
     } = d;
+    // __useRows 是「用途请求体」编辑区的**纯 UI 行清单**（请求体本身在 request.bodyByUse 里）：
+    // 不进配置、也不落草稿，否则保存后的 models[] 会带着界面字段。
+    if (Array.isArray(conn.models)) {
+        conn.models = conn.models.map((m) => {
+            const { __useRows, ...rest } = m;
+            return rest;
+        });
+    }
     return conn;
 }
 
@@ -1138,11 +1067,6 @@ function effectiveProviders() {
     return copy;
 }
 
-/** build() 的可选开关。默认全关 —— 关闭时 build 输出与旧版逐字节一致。 */
-function buildOptions() {
-    return { judgePreset: state.judgePreset === true };
-}
-
 function currentProblems() {
     return validate(effectiveProviders(), state.purposes);
 }
@@ -1154,7 +1078,7 @@ function serializeOutput(cfg) {
 
 function renderOutput() {
     const masked = $('maskKey').checked;
-    let cfg = build(effectiveProviders(), state.purposes, state.useBodies, state.extraGroups, buildOptions());
+    let cfg = build(effectiveProviders(), state.purposes);
     if (masked) cfg = maskKeys(cfg);
     $('preview').textContent = serializeOutput(cfg);
 
@@ -1307,6 +1231,202 @@ function setReqSub(m, key, val) {
     if (val && Object.keys(val).length) m.request[key] = val;
     else delete m.request[key];
     if (Object.keys(m.request).length === 0) delete m.request;   // 全空 → 整个 request 也删掉
+}
+
+// ---------------------------------------------------------------- 逐模型「用途请求体」
+
+/** 「+ 添加一条」预填的 body（用户看到的第一份内容） */
+const DEFAULT_BODY_BY_USE = { max_tokens: 65536, temperature: 1 };
+
+/** 读取某模型 `request.bodyByUse[use]`（不存在/非法 → 空对象，jsonEditor 显示为空） */
+function useBodyOf(m, use) {
+    const bbu = m.request && m.request.bodyByUse;
+    if (!bbu || typeof bbu !== 'object' || Array.isArray(bbu)) return {};
+    const v = bbu[use];
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+}
+
+/** 清掉空的 bodyByUse / request（配置保持紧凑：空对象不写进 JSON） */
+function pruneBodyByUse(m) {
+    if (!m.request || typeof m.request !== 'object') return;
+    const bbu = m.request.bodyByUse;
+    if (bbu !== undefined && (!bbu || typeof bbu !== 'object' || Array.isArray(bbu))) {
+        delete m.request.bodyByUse;
+    } else if (bbu && Object.keys(bbu).length === 0) {
+        delete m.request.bodyByUse;
+    }
+    if (Object.keys(m.request).length === 0) delete m.request;   // 全空 → 整个 request 也删掉
+}
+
+/**
+ * 保证模型对象上有「用途请求体」的**行清单**（`__useRows`）。
+ *
+ * 行清单是纯 UI 状态：它决定界面上显示哪几行；请求体本身存在
+ * `request.bodyByUse[use]` 里（唯一数据源）。打开面板时从 bodyByUse 的键还原行；
+ * 保存/预览时由 stripDraft() 剥掉，绝不写进配置。
+ */
+function ensureUseRows(m) {
+    if (Array.isArray(m.__useRows)) return;
+    const bbu = m.request && m.request.bodyByUse;
+    m.__useRows = bbu && typeof bbu === 'object' && !Array.isArray(bbu)
+        ? Object.keys(bbu).map(use => ({ use }))
+        : [];
+}
+
+/**
+ * 逐模型「用途请求体」折叠（写进 `models[].request.bodyByUse`）。
+ *
+ * 默认 0 条 = 不写字段。每条 = 用途下拉 + 请求体 JSON + 删除按钮；
+ * 用途按模型类型过滤（`bodyUsePurposesForKind`），同一用途只能一条。
+ * 增删/切换用途只重建**本折叠内部**，绝不 renderPanel()（会丢焦点）；
+ * JSON 框复用 jsonEditor —— 输入时只 renderOutput()，不重建节点。
+ *
+ * @returns {HTMLElement|null} embed / gen / tts 模型没有入口（返回 null）
+ */
+function useBodyEditor(m) {
+    const kind = m.kind || 'text';
+    const allowed = bodyUsePurposesForKind(kind);
+    if (allowed.length === 0) return null;   // 嵌入 / 生图 / 语音：不提供入口
+    ensureUseRows(m);
+
+    const outer = el('details', 'json-editor use-body-editor');
+    const sum = document.createElement('summary');
+    outer.appendChild(sum);
+    const body = el('div', 'json-editor-body');
+    outer.appendChild(body);
+
+    const note = el('div', 'field-note');
+    note.textContent = '写进 models[].request.bodyByUse：该模型被某用途使用时，'
+        + '用这段请求体替换「请求体 body」（优先于内置预设）。默认 0 条 = 不覆盖；'
+        + '用途按模型类型过滤，同一用途只能一条。';
+    body.appendChild(note);
+
+    const list = el('div', 'use-body-list');
+    body.appendChild(list);
+
+    const actions = el('div', 'use-body-actions');
+    const addBtn = el('button', 'btn btn-sm');
+    addBtn.type = 'button';
+    // 用半角 +：项目视觉规范禁用全角＋（各平台字体宽度不一，style-check 也会拦）
+    addBtn.textContent = '+ 添加一条';
+    actions.appendChild(addBtn);
+    body.appendChild(actions);
+
+    const count = () => {
+        const bbu = m.request && m.request.bodyByUse;
+        return bbu && typeof bbu === 'object' && !Array.isArray(bbu) ? Object.keys(bbu).length : 0;
+    };
+    const syncSummary = () => {
+        const n = count();
+        sum.textContent = '用途请求体（可添加多条）' + (n ? `（已设置 ${n} 条）` : '');
+        // 有数据时默认展开：否则用户会以为导入/保存把内容弄丢了
+        if (n) outer.open = true;
+    };
+
+    const setBody = (use, v) => {
+        if (v && Object.keys(v).length) {
+            if (!m.request) m.request = {};
+            if (!m.request.bodyByUse || typeof m.request.bodyByUse !== 'object' || Array.isArray(m.request.bodyByUse)) {
+                m.request.bodyByUse = {};
+            }
+            m.request.bodyByUse[use] = v;
+        } else if (m.request && m.request.bodyByUse) {
+            delete m.request.bodyByUse[use];
+        }
+        pruneBodyByUse(m);
+    };
+
+    const buildRows = () => {
+        list.innerHTML = '';
+        for (const row of m.__useRows) {
+            const rowBox = el('div', 'use-body-row');
+            const head = el('div', 'use-body-head');
+
+            const sel = document.createElement('select');
+            sel.className = 'use-body-use';
+            sel.title = '这条请求体用于哪个用途';
+            const usedByOthers = new Set(m.__useRows.filter(r => r !== row).map(r => r.use));
+            let hasCurrent = false;
+            for (const p of allowed) {
+                if (usedByOthers.has(p.key) && p.key !== row.use) continue;   // 同一用途只能一条
+                const o = document.createElement('option');
+                o.value = p.key;
+                o.textContent = p.label;
+                if (p.key === row.use) hasCurrent = true;
+                sel.appendChild(o);
+            }
+            // 导入/旧草稿里可能是"当前类型不适用"的用途：显示出来（校验会指出问题），别静默丢
+            if (!hasCurrent) {
+                const o = document.createElement('option');
+                o.value = row.use;
+                o.textContent = `${row.use}（不适用于当前类型）`;
+                sel.appendChild(o);
+            }
+            sel.value = row.use;
+            sel.onchange = () => {
+                const next = sel.value;
+                if (!next || next === row.use) return;
+                const bbu = m.request && m.request.bodyByUse;
+                if (bbu && Object.prototype.hasOwnProperty.call(bbu, row.use)) {
+                    const val = bbu[row.use];
+                    delete bbu[row.use];
+                    bbu[next] = val;
+                }
+                row.use = next;
+                pruneBodyByUse(m);
+                buildRows();
+                syncSummary();
+                renderOutput();
+            };
+            head.appendChild(sel);
+
+            const del = el('button', 'btn btn-sm btn-danger');
+            del.type = 'button';
+            del.textContent = '删除';
+            del.title = '删除这条用途请求体';
+            del.onclick = () => {
+                const at = m.__useRows.indexOf(row);
+                if (at >= 0) m.__useRows.splice(at, 1);
+                if (m.request && m.request.bodyByUse) {
+                    delete m.request.bodyByUse[row.use];
+                    pruneBodyByUse(m);
+                }
+                buildRows();
+                syncSummary();
+                renderOutput();
+            };
+            head.appendChild(del);
+            rowBox.appendChild(head);
+
+            rowBox.appendChild(jsonEditor({
+                label: '请求体 body',
+                value: useBodyOf(m, row.use),
+                rows: 4,
+                open: true,
+                placeholder: '{\n  "max_tokens": 65536,\n  "temperature": 1\n}',
+                onCommit: (v) => { setBody(row.use, v); syncSummary(); renderOutput(); },
+            }));
+            list.appendChild(rowBox);
+        }
+        addBtn.disabled = allowed.every(p => m.__useRows.some(r => r.use === p.key));
+        addBtn.title = addBtn.disabled ? '该模型类型的合法用途都已添加' : '添加一条用途请求体';
+    };
+
+    addBtn.onclick = () => {
+        const used = new Set(m.__useRows.map(r => r.use));
+        const next = allowed.find(p => !used.has(p.key));
+        if (!next) return;
+        setBody(next.key, JSON.parse(JSON.stringify(DEFAULT_BODY_BY_USE)));
+        m.__useRows.push({ use: next.key });
+        outer.open = true;
+        buildRows();
+        syncSummary();
+        renderOutput();
+    };
+
+    buildRows();
+    syncSummary();
+    return outer;
 }
 
 /**
@@ -1513,7 +1633,7 @@ function responseEditor(m, onChange) {
 // ---------------------------------------------------------------- 事件
 
 $('copyBtn').onclick = async () => {
-    const cfg = build(state.providers, state.purposes, state.useBodies, state.extraGroups, buildOptions());
+    const cfg = build(state.providers, state.purposes);
     const text = serializeOutput($('maskKey').checked ? maskKeys(cfg) : cfg);
     try {
         await navigator.clipboard.writeText(text);
@@ -1529,7 +1649,7 @@ $('copyBtn').onclick = async () => {
 };
 
 $('downloadBtn').onclick = () => {
-    const cfg = build(state.providers, state.purposes, state.useBodies, state.extraGroups, buildOptions());
+    const cfg = build(state.providers, state.purposes);
     const text = serializeOutput($('maskKey').checked ? maskKeys(cfg) : cfg);
     const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
     const a = document.createElement('a');
@@ -1541,7 +1661,7 @@ $('downloadBtn').onclick = () => {
 
 $('clearBtn').onclick = () => {
     if (state.providers.length && !confirm('清空全部连接？')) return;
-    state = { providers: [], purposes: {}, useBodies: {}, extraGroups: [], judgePreset: false };
+    state = { providers: [], purposes: {} };
     try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     renderAll();
 };
@@ -1607,9 +1727,6 @@ function applyImportedState(res) {
             };
         }),
         purposes: s.purposes,
-        useBodies: s.useBodies,
-        extraGroups: s.extraGroups,
-        judgePreset: s.judgePreset === true,
     };
     scheduleSave();
     renderAll();
@@ -1675,10 +1792,6 @@ function factoryState() {
             enabled: true, displayName: '', timeout: 0, request: {},
         }],
         purposes: { chat: ['flash'], summarization: ['flash'], judge: ['flash'] },
-        useBodies: {},
-        extraGroups: [],
-        // 判定请求体预设默认关闭（§12.3）——出厂示例与插件出厂默认保持一致
-        judgePreset: false,
     };
 }
 

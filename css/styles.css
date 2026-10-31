@@ -205,11 +205,6 @@ body {
 /* ---------- 用途绑定（卡片列表 + 取用顺序角标） ---------- */
 .purpose-list { display: flex; flex-direction: column; gap: 14px; }
 .purpose-intro { margin-bottom: 2px; }
-/* 判定请求体预设开关（§12.3）：独立一行，与用途卡片块区分开 */
-.purpose-preset {
-  display: flex; flex-direction: column; gap: 5px;
-  padding: 8px 10px; border: 1px dashed var(--border); border-radius: var(--radius-sm);
-}
 .purpose-hint { margin-top: -2px; }
 .purpose-block { display: flex; flex-direction: column; gap: 7px; }
 .purpose-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
@@ -492,7 +487,24 @@ details[open] > .usage {
 }
 
 .json-editor-body { padding: 9px 0 2px; }
-.json-editor .json-editor { margin-left: 10px; }   /* 用途组嵌在外层折叠里 */
+.json-editor .json-editor { margin-left: 10px; }   /* 嵌套折叠（逐模型请求区 / 用途请求体） */
+/* 逐模型「用途请求体」：一行 = 用途下拉 + 删除，下面挂一个 body JSON 框 */
+.use-body-list { display: flex; flex-direction: column; gap: 8px; }
+.use-body-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  padding: 8px 10px;
+}
+.use-body-head { display: flex; align-items: center; gap: 8px; }
+.use-body-head select {
+  flex: 1 1 auto; min-width: 0;
+  font-size: var(--fs-xs); padding: 6px 8px; padding-right: 30px;
+  background-position: right 9px center;
+}
+.use-body-head .btn-danger { flex: 0 0 auto; padding: 5px 9px; }
+.use-body-row .json-editor { margin-left: 0; margin-top: 6px; border-top: 0; padding-top: 0; }
+.use-body-actions { margin-top: 8px; display: flex; align-items: center; gap: 8px; }
 
 .json-area {
   width: 100%;
