@@ -40,7 +40,11 @@ export const PROVIDER_TEMPLATES = [
       //
       // 这条注释曾经写的是「原生异步接口（wanx）请用自定义 URL」—— 直接把用户赶去填自定义 URL，
       // 而实际上兼容模式**已经支持 qwen-image 同步生图**（官方文档 POST /compatible-mode/v1/images/generations）。
-      notes: '对话 / 嵌入 / 生图 / 语音合成都走这条，不用填 URL。' },
+      notes: '对话 / 嵌入 / 生图 / 语音合成都走这条，不用填 URL。决策模型 decision-model-preview 也走这条，kind 选「决策」并绑定到「评分」；它不在 /models 列表里，需手填模型名。' },
+    { id: 'jev', label: 'Jev 决策模型', provider: 'jev', api: 'openai-completions',
+      baseUrl: 'https://jevmodel.org/v1', cors: 'allow',
+      modelHints: ['jev-latest'],
+      notes: 'System One 决策模型：模型 kind 选「决策」并绑定到「评分」；不参与对话。端点固定为 {baseURL}/systemone。' },
     { id: 'google', label: 'Google Gemini', provider: 'google', api: 'openai-completions',
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', cors: 'unreach',
       modelHints: ['gemini-2.5-flash', 'gemini-embedding-001'],
@@ -76,6 +80,7 @@ export const MODEL_KINDS = [
     { value: 'embed', label: '嵌入', desc: '向量记忆，不参与对话' },
     { value: 'gen', label: '生图', desc: '图像生成' },
     { value: 'tts', label: '语音', desc: '语音合成' },
+    { value: 'decision', label: '决策', desc: 'System One 评分模型（阿里 / Jev），只用于「评分」' },
 ];
 export const KIND_VALUES = MODEL_KINDS.map(k => k.value);
 
@@ -235,6 +240,7 @@ export const MEDIA_VENDOR_USES = {
     gemini: 'Gemini（媒体）',
     stability: 'Stability AI',
     custom: '通用 / 自定义（OpenAI 兼容）',
+    jev: 'Jev AI',
     deepseek: 'DeepSeek',
     anthropic: 'Anthropic Claude',
     moonshot: 'Moonshot 月之暗面',
@@ -288,7 +294,7 @@ export function templateIdForBaseUrl(baseUrl, api) {
 export const PURPOSES = [
     { key: 'chat', label: '对话', hint: '主对话' },
     { key: 'summarization', label: '总结', hint: '会话总结' },
-    { key: 'judge', label: '评分', hint: '给每条消息评分、决定是否主动插话；可绑多个模型，按顺序互为替补' },
+    { key: 'judge', label: '评分', hint: '给每条消息评分、决定是否主动插话；可绑文本/视觉模型，也可绑 kind = decision 的决策模型' },
     { key: 'image-understanding', label: '图片识别', hint: '需 kind = vision' },
     { key: 'text-embedding', label: '向量记忆', hint: '需 kind = embed' },
     { key: 'tts', label: '语音合成', hint: '需 kind = tts' },

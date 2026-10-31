@@ -626,7 +626,7 @@ console.log('\n=== providerForTemplate：什么时候必须把 provider 写进�
 }
 console.log('\n=== 模板数据 ===');
 {
-    check('模板数量 11（「百炼原生」已删）', PROVIDER_TEMPLATES.length === 11, String(PROVIDER_TEMPLATES.length));
+    check('模板数量 12（「百炼原生」已删，新增 Jev 决策）', PROVIDER_TEMPLATES.length === 12, String(PROVIDER_TEMPLATES.length));
     check('google 的 provider 是 google', PROVIDER_TEMPLATES.find(t => t.id === 'google').provider === 'google');
     check('anthropic 用 anthropic-messages 协议',
         PROVIDER_TEMPLATES.find(t => t.id === 'anthropic').api === 'anthropic-messages');
@@ -638,7 +638,7 @@ console.log('\n=== 模板数据 ===');
     check('每个模板都有 cors 标注', PROVIDER_TEMPLATES.every(t => !!t.cors));
     check('api 枚举与协议表一致', PROVIDER_TEMPLATES.every(t => API_DIALECTS.some(a => a.value === t.api)));
     check('7 个用途', PURPOSES.length === 7, String(PURPOSES.length));
-    check('5 种 kind', KIND_VALUES.length === 5);
+    check('6 种 kind（含 decision）', KIND_VALUES.length === 6 && KIND_VALUES.includes('decision'), KIND_VALUES.join(','));
     const ids = PROVIDER_TEMPLATES.map(t => t.id);
     check('模板 id 无重复', new Set(ids).size === ids.length);
 }
@@ -669,7 +669,7 @@ console.log('\n=== 用途表守卫（§12.4）：键与顺序固定，judge = �
     const judge = PURPOSES.find(p => p.key === 'judge');
     check('judge 标签 =「评分」', judge.label === '评分', judge.label);
     check('judge hint 是评分用途说明', /评分/.test(judge.hint), judge.hint);
-    check('judge hint 提到可绑多个模型（互为替补）', /多个/.test(judge.hint) && /替补/.test(judge.hint), judge.hint);
+    check('judge hint 提到文本/视觉/决策模型', /文本/.test(judge.hint) && /decision/.test(judge.hint), judge.hint);
     check('judge 不再叫「评分 / 决策（判定）」', !/决策/.test(judge.label) && !/判定/.test(judge.label), judge.label);
     check('每个用途都有 label/hint', PURPOSES.every(p => !!p.label && !!p.hint));
 }

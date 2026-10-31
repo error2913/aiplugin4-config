@@ -38,6 +38,8 @@ const KEY_CHARS_RE = /^[\x21-\x7E]+$/;
  */
 export function isEligibleKind(use, kind) {
     const k = kind || 'text';
+    // 决策模型（System One）只允许「评分」用途；chat/总结/识图/媒体都不选它。
+    if (k === 'decision') return use === 'judge';
     if (use === 'text-embedding') return k === 'embed';
     if (use === 'image-understanding') return k === 'vision';
     if (use === 'image-generation') return k === 'gen';
@@ -76,7 +78,7 @@ function checkThinkingField(path, body) {
  */
 export function bodyUsePurposesForKind(kind) {
     const k = kind || 'text';
-    if (k === 'embed' || k === 'gen' || k === 'tts') return [];
+    if (k === 'embed' || k === 'gen' || k === 'tts' || k === 'decision') return [];
     return PURPOSES.filter(p => isEligibleKind(p.key, k));
 }
 
@@ -167,7 +169,9 @@ export function validateConfig(cfg) {
                     push(`${mp}.request`, 'request 需为对象');
                 } else {
                     const bbu = m.request.bodyByUse;
-                    if (bbu !== undefined) {
+                    if (bbu !== undefined && (m.kind || 'text') === 'decision') {
+                        push(`${mp}.request.bodyByUse`, '决策模型不支持 bodyByUse（请求体由插件按评分上下文生成）');
+                    } else if (bbu !== undefined) {
                         if (!isPlainObject(bbu)) {
                             push(`${mp}.request.bodyByUse`, 'bodyByUse 需为对象（用途 → 请求体）');
                         } else {
